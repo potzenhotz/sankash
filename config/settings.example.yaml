@@ -1,0 +1,7 @@
+# Example settings file
+# Copy to settings.yaml and customize
+
+db_path: "sankash.duckdb"
+default_currency: "EUR"
+date_format: "%Y-%m-%d"
+import_chunk_size: 1000

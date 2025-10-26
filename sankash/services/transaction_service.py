@@ -1,0 +1,170 @@
+"""Transaction service with pure functions for business logic."""
+
+from datetime import date
+from typing import Optional
+
+import polars as pl
+
+from sankash.core.database import execute_command, execute_query
+from sankash.core.models import Transaction
+
+
+def get_transactions(
+    db_path: str,
+    account_id: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    category: Optional[str] = None,
+    min_amount: Optional[float] = None,
+    max_amount: Optional[float] = None,
+    is_categorized: Optional[bool] = None,
+) -> pl.DataFrame:
+    """
+    Get transactions with optional filters (pure function).
+
+    Returns Polars DataFrame for efficient data processing.
+    """
+    query = "SELECT * FROM transactions WHERE 1=1"
+    params: dict = {}
+
+    if account_id is not None:
+        query += " AND account_id = $account_id"
+        params["account_id"] = account_id
+
+    if start_date:
+        query += " AND date >= $start_date"
+        params["start_date"] = start_date
+
+    if end_date:
+        query += " AND date <= $end_date"
+        params["end_date"] = end_date
+
+    if category:
+        query += " AND category = $category"
+        params["category"] = category
+
+    if min_amount is not None:
+        query += " AND amount >= $min_amount"
+        params["min_amount"] = min_amount
+
+    if max_amount is not None:
+        query += " AND amount <= $max_amount"
+        params["max_amount"] = max_amount
+
+    if is_categorized is not None:
+        query += " AND is_categorized = $is_categorized"
+        params["is_categorized"] = is_categorized
+
+    query += " ORDER BY date DESC, id DESC"
+
+    return execute_query(db_path, query, params if params else None)
+
+
+def get_uncategorized_count(db_path: str) -> int:
+    """Get count of uncategorized transactions (pure function)."""
+    df = execute_query(
+        db_path,
+        "SELECT COUNT(*) as count FROM transactions WHERE is_categorized = FALSE"
+    )
+    return int(df["count"][0])
+
+
+def update_transaction_category(db_path: str, transaction_id: int, category: str) -> None:
+    """Update transaction category (side effect isolated)."""
+    execute_command(
+        db_path,
+        "UPDATE transactions SET category = $category, is_categorized = TRUE WHERE id = $id",
+        {"id": transaction_id, "category": category}
+    )
+
+
+def bulk_update_categories(db_path: str, transaction_ids: list[int], category: str) -> None:
+    """Bulk update transaction categories (side effect isolated)."""
+    execute_command(
+        db_path,
+        "UPDATE transactions SET category = $category, is_categorized = TRUE WHERE id = ANY($ids)",
+        {"ids": transaction_ids, "category": category}
+    )
+
+
+def mark_as_transfer(
+    db_path: str,
+    transaction_id: int,
+    transfer_account_id: int,
+) -> None:
+    """Mark transaction as transfer (side effect isolated)."""
+    execute_command(
+        db_path,
+        """UPDATE transactions
+        SET is_transfer = TRUE,
+            transfer_account_id = $transfer_account_id
+        WHERE id = $id""",
+        {"id": transaction_id, "transfer_account_id": transfer_account_id}
+    )
+
+
+def create_transaction(db_path: str, transaction: Transaction) -> int:
+    """Create new transaction and return its ID."""
+    result = execute_query(
+        db_path,
+        """INSERT INTO transactions
+        (account_id, date, payee, notes, amount, category, is_categorized, is_transfer, transfer_account_id, imported_id)
+        VALUES ($account_id, $date, $payee, $notes, $amount, $category, $is_categorized, $is_transfer, $transfer_account_id, $imported_id)
+        RETURNING id""",
+        {
+            "account_id": transaction.account_id,
+            "date": transaction.date,
+            "payee": transaction.payee,
+            "notes": transaction.notes,
+            "amount": transaction.amount,
+            "category": transaction.category,
+            "is_categorized": transaction.is_categorized,
+            "is_transfer": transaction.is_transfer,
+            "transfer_account_id": transaction.transfer_account_id,
+            "imported_id": transaction.imported_id,
+        }
+    )
+    return int(result["id"][0])
+
+
+def update_transaction(
+    db_path: str,
+    transaction_id: int,
+    transaction: Transaction,
+) -> None:
+    """Update existing transaction (side effect isolated)."""
+    execute_command(
+        db_path,
+        """UPDATE transactions
+        SET account_id = $account_id,
+            date = $date,
+            payee = $payee,
+            notes = $notes,
+            amount = $amount,
+            category = $category,
+            is_categorized = $is_categorized,
+            is_transfer = $is_transfer,
+            transfer_account_id = $transfer_account_id
+        WHERE id = $id""",
+        {
+            "id": transaction_id,
+            "account_id": transaction.account_id,
+            "date": transaction.date,
+            "payee": transaction.payee,
+            "notes": transaction.notes,
+            "amount": transaction.amount,
+            "category": transaction.category,
+            "is_categorized": transaction.is_categorized,
+            "is_transfer": transaction.is_transfer,
+            "transfer_account_id": transaction.transfer_account_id,
+        }
+    )
+
+
+def delete_transaction(db_path: str, transaction_id: int) -> None:
+    """Delete transaction (side effect isolated)."""
+    execute_command(
+        db_path,
+        "DELETE FROM transactions WHERE id = $id",
+        {"id": transaction_id}
+    )

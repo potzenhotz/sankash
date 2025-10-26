@@ -1,0 +1,39 @@
+[project]
+name = "sankash"
+version = "0.1.0"
+description = "Personal Finance Budget Tracker with Reflex"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "reflex>=0.6.0",
+    "duckdb>=1.0.0",
+    "polars>=0.20.0",
+    "plotly>=5.18.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
