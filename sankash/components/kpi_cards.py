@@ -62,9 +62,9 @@ def kpi_grid(
         kpi_card("Net", net, "wallet", "blue"),
         kpi_card(
             "Uncategorized",
-            str(uncategorized),
+            uncategorized,
             "alert-circle",
-            "orange" if uncategorized > 0 else "gray",
+            "orange",
         ),
         columns="4",
         spacing="4",

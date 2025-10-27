@@ -4,7 +4,6 @@ import reflex as rx
 
 from sankash.components.layout import layout
 from sankash.state.transaction_state import TransactionState
-from sankash.utils.formatters import format_currency, format_date
 
 
 def transaction_filters() -> rx.Component:
@@ -82,7 +81,7 @@ def bulk_actions() -> rx.Component:
     return rx.card(
         rx.hstack(
             rx.text(
-                f"Selected: {len(TransactionState.selected_ids)}",
+                f"Selected: {TransactionState.selected_ids.length()}",
                 size="2",
                 weight="bold",
             ),
@@ -97,7 +96,7 @@ def bulk_actions() -> rx.Component:
                 "Apply to Selected",
                 on_click=TransactionState.bulk_update_categories,
                 size="2",
-                disabled=len(TransactionState.selected_ids) == 0,
+                disabled=TransactionState.selected_ids.length() == 0,
             ),
             spacing="2",
             align="center",
@@ -108,23 +107,18 @@ def bulk_actions() -> rx.Component:
 
 def transaction_row(transaction: dict) -> rx.Component:
     """Transaction table row (functional component)."""
-    amount = float(transaction["amount"])
-    is_selected = transaction["id"] in TransactionState.selected_ids
-
     return rx.table.row(
         rx.table.cell(
             rx.checkbox(
-                checked=is_selected,
                 on_change=lambda: TransactionState.toggle_selection(transaction["id"]),
             )
         ),
-        rx.table.cell(format_date(transaction["date"])),
+        rx.table.cell(transaction["date"]),
         rx.table.cell(transaction["payee"]),
         rx.table.cell(transaction.get("notes", "-")),
         rx.table.cell(
             rx.text(
-                format_currency(amount),
-                color="green" if amount > 0 else "red",
+                f"€{transaction['amount']:.2f}",
                 weight="medium",
             )
         ),
@@ -160,7 +154,7 @@ def transactions_table() -> rx.Component:
                 rx.heading("Transactions", size="5"),
                 rx.spacer(),
                 rx.text(
-                    f"Total: {len(TransactionState.transactions)}",
+                    f"Total: {TransactionState.transactions.length()}",
                     size="2",
                     color="gray",
                 ),
@@ -206,7 +200,7 @@ def transactions_page() -> rx.Component:
             rx.divider(),
             transaction_filters(),
             rx.cond(
-                len(TransactionState.selected_ids) > 0,
+                TransactionState.selected_ids.length() > 0,
                 bulk_actions(),
             ),
             transactions_table(),

@@ -17,7 +17,7 @@ class RuleState(BaseState):
 
     # Form fields
     form_name: str = ""
-    form_priority: int = 0
+    form_priority: str = "0"  # Keep as string for input compatibility
     form_is_active: bool = True
 
     # Condition fields
@@ -35,12 +35,25 @@ class RuleState(BaseState):
 
     def load_rules(self) -> None:
         """Load all rules."""
+        import json
+
         self.loading = True
         self.error = ""
 
         try:
             df = rule_service.get_rules(self.db_path, active_only=False)
-            self.rules = df.to_dicts()
+            rules_list = df.to_dicts()
+
+            # Format conditions and actions for display
+            for rule in rules_list:
+                conditions = json.loads(rule["conditions"]) if isinstance(rule["conditions"], str) else rule["conditions"]
+                actions = json.loads(rule["actions"]) if isinstance(rule["actions"], str) else rule["actions"]
+
+                # Add formatted text
+                rule["condition_text"] = f"{conditions[0]['field']} {conditions[0]['operator']} '{conditions[0]['value']}'" if conditions else "-"
+                rule["action_text"] = f"{actions[0]['action_type']}: {actions[0]['value']}" if actions else "-"
+
+            self.rules = rules_list
         except Exception as e:
             self.error = f"Failed to load rules: {str(e)}"
         finally:
@@ -55,7 +68,7 @@ class RuleState(BaseState):
         try:
             rule = Rule(
                 name=self.form_name,
-                priority=self.form_priority,
+                priority=int(self.form_priority) if self.form_priority else 0,
                 is_active=self.form_is_active,
                 conditions=[
                     RuleCondition(
@@ -131,7 +144,7 @@ class RuleState(BaseState):
     def clear_form(self) -> None:
         """Clear form fields."""
         self.form_name = ""
-        self.form_priority = 0
+        self.form_priority = "0"
         self.form_is_active = True
         self.condition_field = "payee"
         self.condition_operator = "contains"

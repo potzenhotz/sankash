@@ -5,7 +5,6 @@ import reflex as rx
 from sankash.components.layout import layout
 from sankash.components.kpi_cards import kpi_grid
 from sankash.state.dashboard_state import DashboardState
-from sankash.utils.formatters import format_currency
 
 
 def date_range_selector() -> rx.Component:
@@ -45,7 +44,7 @@ def sankey_chart() -> rx.Component:
         rx.vstack(
             rx.heading("Money Flow", size="5"),
             rx.cond(
-                len(DashboardState.sankey_nodes) > 0,
+                DashboardState.sankey_nodes.length() > 0,
                 rx.text(
                     "Sankey diagram will be rendered here with Plotly",
                     size="2",
@@ -60,7 +59,7 @@ def sankey_chart() -> rx.Component:
             # TODO: Add Plotly Sankey diagram
             # This will require custom component integration
             rx.text(
-                f"Nodes: {len(DashboardState.sankey_nodes)}, Links: {len(DashboardState.sankey_links)}",
+                f"Nodes: {DashboardState.sankey_nodes.length()}, Links: {DashboardState.sankey_links.length()}",
                 size="1",
                 color="gray",
             ),
@@ -81,9 +80,9 @@ def dashboard_page() -> rx.Component:
             rx.divider(),
             date_range_selector(),
             kpi_grid(
-                income=format_currency(DashboardState.income),
-                expense=format_currency(DashboardState.expense),
-                net=format_currency(DashboardState.net),
+                income=f"€{DashboardState.income:.2f}",
+                expense=f"€{DashboardState.expense:.2f}",
+                net=f"€{DashboardState.net:.2f}",
                 uncategorized=DashboardState.uncategorized_count,
             ),
             rx.cond(

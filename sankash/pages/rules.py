@@ -94,30 +94,22 @@ def rule_form() -> rx.Component:
 
 def rule_row(rule: dict) -> rx.Component:
     """Rule table row (functional component)."""
-    import json
-
-    conditions = json.loads(rule["conditions"]) if isinstance(rule["conditions"], str) else rule["conditions"]
-    actions = json.loads(rule["actions"]) if isinstance(rule["actions"], str) else rule["actions"]
-
-    # Format condition and action for display
-    cond_text = f"{conditions[0]['field']} {conditions[0]['operator']} '{conditions[0]['value']}'" if conditions else ""
-    action_text = f"{actions[0]['action_type']}: {actions[0]['value']}" if actions else ""
-
     return rx.table.row(
         rx.table.cell(rule["name"]),
-        rx.table.cell(str(rule["priority"])),
-        rx.table.cell(cond_text),
-        rx.table.cell(action_text),
+        rx.table.cell(rule["priority"]),
+        rx.table.cell(rule.get("condition_text", "-")),
+        rx.table.cell(rule.get("action_text", "-")),
         rx.table.cell(
-            rx.badge(
-                "Active" if rule["is_active"] else "Inactive",
-                color_scheme="green" if rule["is_active"] else "gray",
+            rx.cond(
+                rule["is_active"],
+                rx.badge("Active", color_scheme="green"),
+                rx.badge("Inactive", color_scheme="gray"),
             )
         ),
         rx.table.cell(
             rx.hstack(
                 rx.button(
-                    rx.icon("play" if not rule["is_active"] else "pause", size=16),
+                    rx.icon("play", size=16),
                     on_click=lambda: RuleState.toggle_rule_active(
                         rule["id"], rule["is_active"]
                     ),

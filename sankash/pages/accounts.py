@@ -4,7 +4,6 @@ import reflex as rx
 
 from sankash.components.layout import layout
 from sankash.state.account_state import AccountState
-from sankash.utils.formatters import format_currency
 
 
 def account_form() -> rx.Component:
@@ -55,16 +54,16 @@ def account_row(account: dict) -> rx.Component:
         rx.table.cell(account["account_number"]),
         rx.table.cell(
             rx.text(
-                format_currency(float(account.get("balance", 0)), account["currency"]),
+                f"€{account['balance']:.2f}",
                 weight="bold",
-                color="green" if float(account.get("balance", 0)) > 0 else "red",
             )
         ),
-        rx.table.cell(str(account.get("transaction_count", 0))),
+        rx.table.cell(account["transaction_count"]),
         rx.table.cell(
-            rx.badge(
-                "Active" if account["is_active"] else "Inactive",
-                color_scheme="green" if account["is_active"] else "gray",
+            rx.cond(
+                account["is_active"],
+                rx.badge("Active", color_scheme="green"),
+                rx.badge("Inactive", color_scheme="gray"),
             )
         ),
         rx.table.cell(

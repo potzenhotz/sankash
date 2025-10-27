@@ -18,13 +18,9 @@ def upload_form() -> rx.Component:
             ),
             # Account selection
             rx.select(
-                [f"{acc['name']} ({acc['bank']})" for acc in ImportState.accounts],
+                ImportState.account_options,
                 placeholder="Select Account",
-                on_change=lambda val: ImportState.set_selected_account_id(
-                    ImportState.accounts[int(val.split(" ")[0])]["id"]
-                    if val
-                    else 0
-                ),
+                on_change=ImportState.handle_account_selection,
             ),
             # File upload
             rx.upload(
@@ -76,10 +72,10 @@ def upload_form() -> rx.Component:
 def preview_row(transaction: dict) -> rx.Component:
     """Preview table row (functional component)."""
     return rx.table.row(
-        rx.table.cell(str(transaction.get("date", ""))),
+        rx.table.cell(transaction.get("date", "")),
         rx.table.cell(transaction.get("payee", "")),
         rx.table.cell(transaction.get("notes", "-")),
-        rx.table.cell(f"€{float(transaction.get('amount', 0)):.2f}"),
+        rx.table.cell(f"€{transaction.get('amount', 0):.2f}"),
     )
 
 
@@ -89,7 +85,7 @@ def preview_table() -> rx.Component:
         rx.vstack(
             rx.heading("Preview", size="5"),
             rx.text(
-                f"Showing first {len(ImportState.preview_data)} transactions",
+                f"Showing first {ImportState.preview_data.length()} transactions",
                 size="2",
                 color="gray",
             ),

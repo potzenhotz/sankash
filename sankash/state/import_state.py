@@ -26,6 +26,19 @@ class ImportState(BaseState):
     import_stats: dict[str, int] = {}
     show_results: bool = False
 
+    @rx.var
+    def account_options(self) -> list[str]:
+        """Get formatted account options for select."""
+        return [f"{acc['name']} ({acc['bank']})" for acc in self.accounts]
+
+    def handle_account_selection(self, value: str) -> None:
+        """Handle account selection from dropdown."""
+        # Find account by matching the formatted string
+        for acc in self.accounts:
+            if f"{acc['name']} ({acc['bank']})" == value:
+                self.selected_account_id = acc["id"]
+                break
+
     def load_accounts(self) -> None:
         """Load available accounts."""
         try:
