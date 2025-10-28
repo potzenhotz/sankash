@@ -21,7 +21,7 @@ echo "Logging output to: $LOG_FILE"
 echo ""
 
 # Start Reflex in background and capture PID
-poetry run reflex run >"$LOG_FILE" 2>&1 &
+uv run reflex run >"$LOG_FILE" 2>&1 &
 APP_PID=$!
 echo $APP_PID >"$PID_FILE"
 
