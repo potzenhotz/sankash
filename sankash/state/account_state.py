@@ -10,6 +10,8 @@ from sankash.state.base import BaseState
 class AccountState(BaseState):
     """State for account management page."""
 
+    state_auto_setters = True  # Explicitly enable auto setters
+
     accounts: list[dict] = []
     loading: bool = False
     error: str = ""

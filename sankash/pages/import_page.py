@@ -12,15 +12,37 @@ def upload_form() -> rx.Component:
         rx.vstack(
             rx.heading("Import Transactions", size="4"),
             rx.text(
-                "Upload a CSV file with columns: date, payee, amount, notes",
+                "Upload a CSV file from your bank or in standard format",
                 size="2",
                 color="gray",
             ),
             # Account selection
-            rx.select(
-                ImportState.account_options,
-                placeholder="Select Account",
-                on_change=ImportState.handle_account_selection,
+            rx.vstack(
+                rx.text("Select Account", size="2", weight="bold"),
+                rx.select(
+                    ImportState.account_options,
+                    placeholder="Select Account",
+                    on_change=ImportState.handle_account_selection,
+                ),
+                spacing="1",
+                width="100%",
+            ),
+            # Bank format selection
+            rx.vstack(
+                rx.text("Bank Format", size="2", weight="bold"),
+                rx.select(
+                    ImportState.bank_format_options,
+                    placeholder="Select Format",
+                    value=ImportState.selected_bank_format_display,
+                    on_change=ImportState.handle_bank_format_selection,
+                ),
+                rx.text(
+                    "Standard CSV format: date (YYYY-MM-DD), payee, amount, notes",
+                    size="1",
+                    color="gray",
+                ),
+                spacing="1",
+                width="100%",
             ),
             # File upload
             rx.upload(
@@ -111,6 +133,33 @@ def import_results() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.heading("Import Results", size="5"),
+            rx.callout(
+                rx.vstack(
+                    rx.text(
+                        f"Successfully imported {ImportState.import_stats.get('imported', 0)} transactions!",
+                        size="3",
+                        weight="bold",
+                    ),
+                    rx.cond(
+                        ImportState.import_stats.get("duplicates", 0) > 0,
+                        rx.text(
+                            f"{ImportState.import_stats.get('duplicates', 0)} duplicates were skipped.",
+                            size="2",
+                        ),
+                    ),
+                    rx.cond(
+                        ImportState.import_stats.get("categorized", 0) > 0,
+                        rx.text(
+                            f"{ImportState.import_stats.get('categorized', 0)} transactions were auto-categorized by rules.",
+                            size="2",
+                        ),
+                    ),
+                    spacing="1",
+                ),
+                icon="circle-check",
+                color="green",
+                size="2",
+            ),
             rx.grid(
                 rx.card(
                     rx.vstack(

@@ -41,6 +41,7 @@ def sidebar() -> rx.Component:
                 nav_link("Dashboard", "/", "layout-dashboard"),
                 nav_link("Transactions", "/transactions", "list"),
                 nav_link("Accounts", "/accounts", "building-2"),
+                nav_link("Categories", "/categories", "tags"),
                 nav_link("Rules", "/rules", "list-checks"),
                 nav_link("Import", "/import", "upload"),
                 spacing="1",

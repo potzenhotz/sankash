@@ -6,6 +6,34 @@ from sankash.components.layout import layout
 from sankash.state.transaction_state import TransactionState
 
 
+def search_bar() -> rx.Component:
+    """Quick search bar for transactions."""
+    return rx.card(
+        rx.hstack(
+            rx.icon("search", size=20),
+            rx.input(
+                placeholder="Search transactions (payee, notes, category)...",
+                value=TransactionState.search_query,
+                on_change=TransactionState.set_search_query,
+                on_blur=TransactionState.load_transactions,
+                width="100%",
+            ),
+            rx.cond(
+                TransactionState.search_query != "",
+                rx.button(
+                    rx.icon("x", size=16),
+                    on_click=TransactionState.clear_search,
+                    size="2",
+                    variant="soft",
+                ),
+            ),
+            spacing="2",
+            width="100%",
+            align="center",
+        ),
+    )
+
+
 def transaction_filters() -> rx.Component:
     """Transaction filter controls (functional component)."""
     return rx.card(
@@ -125,7 +153,10 @@ def transaction_row(transaction: dict) -> rx.Component:
         rx.table.cell(
             rx.cond(
                 transaction["is_categorized"],
-                rx.badge(transaction["category"], color_scheme="blue"),
+                rx.badge(
+                    transaction.get("category_display", transaction["category"]),
+                    color_scheme="blue"
+                ),
                 rx.select(
                     TransactionState.categories,
                     placeholder="Uncategorized",
@@ -198,6 +229,7 @@ def transactions_page() -> rx.Component:
             rx.heading("Transaction Management", size="8"),
             rx.text("View and categorize your transactions", color="gray", size="3"),
             rx.divider(),
+            search_bar(),
             transaction_filters(),
             rx.cond(
                 TransactionState.selected_ids.length() > 0,

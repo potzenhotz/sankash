@@ -3,14 +3,18 @@
 import reflex as rx
 
 from sankash.core.models import Rule, RuleAction, RuleCondition
-from sankash.services import rule_service
+from sankash.services import rule_service, category_service
 from sankash.state.base import BaseState
 
 
 class RuleState(BaseState):
     """State for rules management page."""
 
+    state_auto_setters = True  # Explicitly enable auto setters
+
     rules: list[dict] = []
+    categories: list[str] = []
+    category_display_map: dict[str, str] = {}  # Maps display name -> actual name
     loading: bool = False
     error: str = ""
     success: str = ""
@@ -59,6 +63,28 @@ class RuleState(BaseState):
         finally:
             self.loading = False
 
+    def load_categories(self) -> None:
+        """Load available categories with hierarchical display names."""
+        try:
+            df = category_service.get_categories(self.db_path)
+            categories = df.to_dicts()
+
+            # Build list of display names and mapping
+            display_names = []
+            display_map = {}
+
+            for cat in categories:
+                display_name = category_service.get_category_display_name(
+                    self.db_path, cat["name"]
+                )
+                display_names.append(display_name)
+                display_map[display_name] = cat["name"]
+
+            self.categories = display_names
+            self.category_display_map = display_map
+        except Exception as e:
+            self.error = f"Failed to load categories: {str(e)}"
+
     def create_rule(self) -> None:
         """Create new rule from form data."""
         if not self.form_name or not self.condition_value or not self.action_value:
@@ -66,6 +92,11 @@ class RuleState(BaseState):
             return
 
         try:
+            # Convert display name to actual category name
+            actual_category = self.category_display_map.get(
+                self.action_value, self.action_value
+            )
+
             rule = Rule(
                 name=self.form_name,
                 priority=int(self.form_priority) if self.form_priority else 0,
@@ -80,7 +111,7 @@ class RuleState(BaseState):
                 actions=[
                     RuleAction(
                         action_type=self.action_type,
-                        value=self.action_value,
+                        value=actual_category,
                     )
                 ],
             )

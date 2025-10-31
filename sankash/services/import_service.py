@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 import polars as pl
 
+from sankash.converters.bank_converters import BankFormat, get_converter
 from sankash.core.models import Transaction
 from sankash.services.transaction_service import create_transaction, get_transactions
 from sankash.utils.duplicate_detection import find_duplicates
@@ -24,12 +25,16 @@ def parse_csv_to_dataframe(
 
     Assumes standardized format with date, payee, notes, amount columns.
     """
-    df = pl.read_csv(file_path)
+    # Read CSV with truncate_ragged_lines to handle extra columns
+    df = pl.read_csv(file_path, truncate_ragged_lines=True)
 
     # Check if columns exist
     required_columns = {date_column, payee_column, amount_column}
     if not required_columns.issubset(set(df.columns)):
-        raise ValueError(f"CSV must contain columns: {required_columns}")
+        raise ValueError(
+            f"CSV must contain columns: {required_columns}. "
+            f"Found columns: {df.columns}"
+        )
 
     # Rename columns to standard names
     column_mapping = {
@@ -138,7 +143,7 @@ def import_transactions(
     db_path: str,
     file_path: str | Path,
     account_id: int,
-    converter: Optional[Callable[[str | Path], pl.DataFrame]] = None,
+    bank_format: BankFormat = BankFormat.STANDARD,
 ) -> dict[str, int]:
     """
     Import transactions from CSV file.
@@ -147,12 +152,15 @@ def import_transactions(
         db_path: Database path
         file_path: Path to CSV file
         account_id: Account to import into
-        converter: Optional converter function for bank-specific formats
+        bank_format: Bank format for conversion (default: STANDARD)
 
     Returns:
         Dictionary with import statistics
     """
-    # Parse CSV (use converter if provided)
+    # Get converter for bank format
+    converter = get_converter(bank_format)
+
+    # Parse CSV (use converter if bank-specific format)
     if converter:
         import_df = converter(file_path)
     else:
@@ -196,7 +204,7 @@ def import_transactions(
 def preview_import(
     file_path: str | Path,
     account_id: int,
-    converter: Optional[Callable[[str | Path], pl.DataFrame]] = None,
+    bank_format: BankFormat = BankFormat.STANDARD,
     limit: int = 10,
 ) -> pl.DataFrame:
     """
@@ -204,14 +212,54 @@ def preview_import(
 
     Returns DataFrame with first N rows after transformation.
     """
-    # Parse CSV
-    if converter:
-        import_df = converter(file_path)
-    else:
-        import_df = parse_csv_to_dataframe(file_path)
+    try:
+        # Get converter for bank format
+        converter = get_converter(bank_format)
 
-    # Transform
-    import_df = transform_import_dataframe(import_df, account_id)
+        # Parse CSV with detailed error handling
+        if converter:
+            try:
+                import_df = converter(file_path)
+            except Exception as e:
+                # Read first few lines for diagnostics
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        first_lines = [f.readline() for _ in range(3)]
+                    raise ValueError(
+                        f"Failed to parse CSV with bank format '{bank_format.value}'. "
+                        f"Error: {str(e)}. "
+                        f"First lines of file:\n{''.join(first_lines)}"
+                    )
+                except Exception:
+                    raise ValueError(
+                        f"Failed to parse CSV with bank format '{bank_format.value}'. "
+                        f"Error: {str(e)}"
+                    )
+        else:
+            try:
+                import_df = parse_csv_to_dataframe(file_path)
+            except Exception as e:
+                # Read first few lines for diagnostics
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        first_lines = [f.readline() for _ in range(3)]
+                    raise ValueError(
+                        f"Failed to parse standard CSV. "
+                        f"Error: {str(e)}. "
+                        f"Expected columns: date, payee, amount, notes. "
+                        f"First lines of file:\n{''.join(first_lines)}"
+                    )
+                except Exception:
+                    raise ValueError(
+                        f"Failed to parse standard CSV. "
+                        f"Error: {str(e)}"
+                    )
 
-    # Return preview
-    return import_df.head(limit)
+        # Transform
+        import_df = transform_import_dataframe(import_df, account_id)
+
+        # Return preview
+        return import_df.head(limit)
+    except Exception as e:
+        # Re-raise with additional context
+        raise Exception(f"Preview failed for file {file_path}: {str(e)}")

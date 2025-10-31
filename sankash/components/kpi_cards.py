@@ -63,7 +63,7 @@ def kpi_grid(
         kpi_card(
             "Uncategorized",
             uncategorized,
-            "alert-circle",
+            "circle-alert",
             "orange",
         ),
         columns="4",

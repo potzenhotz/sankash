@@ -1,8 +1,14 @@
 -- Sankash Database Schema
 
+-- Create sequences for auto-incrementing IDs
+CREATE SEQUENCE IF NOT EXISTS seq_accounts_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_categories_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_transactions_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_rules_id START 1;
+
 -- Accounts table
 CREATE TABLE IF NOT EXISTS accounts (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_accounts_id'),
     name VARCHAR NOT NULL,
     bank VARCHAR NOT NULL,
     account_number VARCHAR NOT NULL,
@@ -13,7 +19,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 -- Categories table
 CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_categories_id'),
     name VARCHAR NOT NULL UNIQUE,
     parent_category VARCHAR,
     color VARCHAR NOT NULL DEFAULT '#6366f1',
@@ -22,7 +28,7 @@ CREATE TABLE IF NOT EXISTS categories (
 
 -- Transactions table
 CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_transactions_id'),
     account_id INTEGER NOT NULL,
     date DATE NOT NULL,
     payee VARCHAR NOT NULL,
@@ -40,7 +46,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 -- Rules table
 CREATE TABLE IF NOT EXISTS rules (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_rules_id'),
     name VARCHAR NOT NULL,
     priority INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,

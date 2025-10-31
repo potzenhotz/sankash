@@ -11,8 +11,11 @@ from sankash.state.base import BaseState
 class TransactionState(BaseState):
     """State for transaction management page."""
 
+    state_auto_setters = True  # Explicitly enable auto setters
+
     transactions: list[dict] = []
     categories: list[str] = []
+    category_display_map: dict[str, str] = {}  # Maps display name -> actual name
     loading: bool = False
     error: str = ""
 
@@ -24,6 +27,7 @@ class TransactionState(BaseState):
     filter_min_amount: str = ""
     filter_max_amount: str = ""
     filter_uncategorized_only: bool = False
+    search_query: str = ""  # Quick search across payee, notes, category
 
     # Selection
     selected_ids: list[int] = []
@@ -68,27 +72,65 @@ class TransactionState(BaseState):
                 is_categorized=False if self.filter_uncategorized_only else None,
             )
 
-            self.transactions = df.to_dicts()
+            # Enrich transactions with hierarchical category display names
+            transactions = df.to_dicts()
+            for txn in transactions:
+                if txn.get("category"):
+                    txn["category_display"] = category_service.get_category_display_name(
+                        self.db_path, txn["category"]
+                    )
+                else:
+                    txn["category_display"] = None
+
+            # Apply search filter if search query exists
+            if self.search_query:
+                query = self.search_query.lower()
+                transactions = [
+                    txn for txn in transactions
+                    if query in txn.get("payee", "").lower()
+                    or query in txn.get("notes", "").lower()
+                    or query in txn.get("category", "").lower()
+                    or query in txn.get("category_display", "").lower()
+                ]
+
+            self.transactions = transactions
         except Exception as e:
             self.error = f"Failed to load transactions: {str(e)}"
         finally:
             self.loading = False
 
     def load_categories(self) -> None:
-        """Load available categories."""
+        """Load available categories with hierarchical display names."""
         try:
             df = category_service.get_categories(self.db_path)
-            self.categories = df["name"].to_list()
+            categories = df.to_dicts()
+
+            # Build list of display names and mapping
+            display_names = []
+            display_map = {}
+
+            for cat in categories:
+                display_name = category_service.get_category_display_name(
+                    self.db_path, cat["name"]
+                )
+                display_names.append(display_name)
+                display_map[display_name] = cat["name"]
+
+            self.categories = display_names
+            self.category_display_map = display_map
         except Exception as e:
             self.error = f"Failed to load categories: {str(e)}"
 
     def update_category(self, transaction_id: int, category: str) -> None:
         """Update single transaction category."""
         try:
+            # Convert display name to actual category name
+            actual_category = self.category_display_map.get(category, category)
+
             transaction_service.update_transaction_category(
                 self.db_path,
                 transaction_id,
-                category,
+                actual_category,
             )
             self.load_transactions()
         except Exception as e:
@@ -101,10 +143,15 @@ class TransactionState(BaseState):
             return
 
         try:
+            # Convert display name to actual category name
+            actual_category = self.category_display_map.get(
+                self.bulk_category, self.bulk_category
+            )
+
             transaction_service.bulk_update_categories(
                 self.db_path,
                 self.selected_ids,
-                self.bulk_category,
+                actual_category,
             )
             self.selected_ids = []
             self.bulk_category = ""
@@ -128,6 +175,12 @@ class TransactionState(BaseState):
         self.filter_min_amount = ""
         self.filter_max_amount = ""
         self.filter_uncategorized_only = False
+        self.search_query = ""
+        self.load_transactions()
+
+    def clear_search(self) -> None:
+        """Clear only the search query."""
+        self.search_query = ""
         self.load_transactions()
 
     def set_last_30_days(self) -> None:

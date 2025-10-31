@@ -63,8 +63,9 @@ def rule_form() -> rx.Component:
                     value=RuleState.action_type,
                     on_change=RuleState.set_action_type,
                 ),
-                rx.input(
-                    placeholder="Category",
+                rx.select(
+                    RuleState.categories,
+                    placeholder="Select Category",
                     value=RuleState.action_value,
                     on_change=RuleState.set_action_value,
                 ),
@@ -171,7 +172,7 @@ def rules_table() -> rx.Component:
     )
 
 
-@rx.page(route="/rules", on_load=RuleState.load_rules)
+@rx.page(route="/rules", on_load=[RuleState.load_rules, RuleState.load_categories])
 def rules_page() -> rx.Component:
     """Rules page."""
     return layout(

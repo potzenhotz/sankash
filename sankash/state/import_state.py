@@ -2,12 +2,15 @@
 
 import reflex as rx
 
+from sankash.converters.bank_converters import BankFormat
 from sankash.services import import_service, account_service
 from sankash.state.base import BaseState
 
 
 class ImportState(BaseState):
     """State for CSV import page."""
+
+    state_auto_setters = True  # Explicitly enable auto setters
 
     accounts: list[dict] = []
     loading: bool = False
@@ -17,6 +20,7 @@ class ImportState(BaseState):
     # Form fields
     selected_account_id: int = 0
     uploaded_file: str = ""
+    bank_format: str = BankFormat.STANDARD.value
 
     # Preview
     preview_data: list[dict] = []
@@ -31,6 +35,21 @@ class ImportState(BaseState):
         """Get formatted account options for select."""
         return [f"{acc['name']} ({acc['bank']})" for acc in self.accounts]
 
+    @rx.var
+    def bank_format_options(self) -> list[str]:
+        """Get bank format options for select."""
+        return ["Standard CSV", "Deutsche Bank", "ING"]
+
+    @rx.var
+    def selected_bank_format_display(self) -> str:
+        """Get display name for selected bank format."""
+        format_map = {
+            BankFormat.STANDARD.value: "Standard CSV",
+            BankFormat.DEUTSCHE_BANK.value: "Deutsche Bank",
+            BankFormat.ING.value: "ING",
+        }
+        return format_map.get(self.bank_format, "Standard CSV")
+
     def handle_account_selection(self, value: str) -> None:
         """Handle account selection from dropdown."""
         # Find account by matching the formatted string
@@ -38,6 +57,16 @@ class ImportState(BaseState):
             if f"{acc['name']} ({acc['bank']})" == value:
                 self.selected_account_id = acc["id"]
                 break
+
+    def handle_bank_format_selection(self, value: str) -> None:
+        """Handle bank format selection from dropdown."""
+        # Map display name to enum value
+        format_map = {
+            "Standard CSV": BankFormat.STANDARD.value,
+            "Deutsche Bank": BankFormat.DEUTSCHE_BANK.value,
+            "ING": BankFormat.ING.value,
+        }
+        self.bank_format = format_map.get(value, BankFormat.STANDARD.value)
 
     def load_accounts(self) -> None:
         """Load available accounts."""
@@ -80,6 +109,7 @@ class ImportState(BaseState):
             df = import_service.preview_import(
                 self.uploaded_file,
                 self.selected_account_id,
+                bank_format=BankFormat(self.bank_format),
                 limit=20,
             )
             self.preview_data = df.to_dicts()
@@ -103,6 +133,7 @@ class ImportState(BaseState):
                 self.db_path,
                 self.uploaded_file,
                 self.selected_account_id,
+                bank_format=BankFormat(self.bank_format),
             )
 
             self.import_stats = stats

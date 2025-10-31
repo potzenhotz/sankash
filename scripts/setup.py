@@ -8,7 +8,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import load_settings
 from sankash.core.database import init_database
-from sankash.services.category_service import seed_default_categories
 
 
 def main() -> None:
@@ -26,11 +25,11 @@ def main() -> None:
     print("✅ Database initialized")
     print()
 
-    # Seed categories
-    print("🏷️  Seeding default categories...")
-    seed_default_categories(db_path)
-    print("✅ Default categories created")
-    print()
+    # Seed categories (commented out - users can create their own)
+    # print("🏷️  Seeding default categories...")
+    # seed_default_categories(db_path)
+    # print("✅ Default categories created")
+    # print()
 
     print("✨ Setup complete!")
     print()

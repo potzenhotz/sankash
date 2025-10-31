@@ -8,6 +8,9 @@ from config.settings import load_settings
 class BaseState(rx.State):
     """Base state with common functionality."""
 
+    # Explicitly enable auto setters (Reflex 0.8.9+)
+    state_auto_setters = True
+
     @property
     def db_path(self) -> str:
         """Get database path from settings."""

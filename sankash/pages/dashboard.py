@@ -43,29 +43,9 @@ def sankey_chart() -> rx.Component:
     return rx.card(
         rx.vstack(
             rx.heading("Money Flow", size="5"),
-            rx.cond(
-                DashboardState.sankey_nodes.length() > 0,
-                rx.text(
-                    "Sankey diagram will be rendered here with Plotly",
-                    size="2",
-                    color="gray",
-                ),
-                rx.text(
-                    "No categorized transactions in this period",
-                    size="2",
-                    color="gray",
-                ),
-            ),
-            # TODO: Add Plotly Sankey diagram
-            # This will require custom component integration
-            rx.text(
-                f"Nodes: {DashboardState.sankey_nodes.length()}, Links: {DashboardState.sankey_links.length()}",
-                size="1",
-                color="gray",
-            ),
+            rx.plotly(data=DashboardState.sankey_figure),
             spacing="3",
             width="100%",
-            min_height="400px",
         ),
     )
 

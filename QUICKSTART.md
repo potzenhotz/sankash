@@ -2,50 +2,116 @@
 
 Get up and running with Sankash in 5 minutes!
 
+> **⚠️ IMPORTANT: Run the setup script first!**
+>
+> Before starting the app, you **must** run `python scripts/setup.py` to initialize the database.
+> Otherwise you'll see errors like "Table with name accounts does not exist!"
+
 ## Prerequisites
 
 - Python 3.11 or higher
-- pip
 
-## Installation
-
-1. **Clone or navigate to the project**
+## Quick Setup (3 Commands)
 
 ```bash
-cd sankash
+# 1. Install dependencies
+uv install
+
+# 2. Initialize database (REQUIRED!)
+uv run scripts/setup.py
+
+# 3. Start the app
+uv run reflex run
 ```
 
-2. **Create virtual environment (recommended)**
+**What setup.py does:**
+
+- Creates the `sankash.duckdb` database file
+- Initializes all tables (accounts, transactions, categories, rules)
+- Creates indexes for performance
+- Seeds 12 default categories (Groceries, Dining, etc.)
+
+**You'll see output like:**
+
+```
+🚀 Setting up Sankash...
+
+📊 Initializing database at: sankash.duckdb
+✅ Database initialized
+
+🏷️  Seeding default categories...
+✅ Default categories created
+
+✨ Setup complete!
+```
+
+### 5. Start the app
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv run reflex run
 ```
 
-3. **Install dependencies**
+The app will open at `http://localhost:3000` (or the next available port if 3000 is taken)
+
+## Configuration (Optional)
+
+### Settings File
+
+Sankash can be customized via a settings file located at `config/settings.yaml`.
+
+**Location:** `config/settings.yaml`
+
+**How to create:**
 
 ```bash
-pip install -e ".[dev]"
+# Copy the example file
+cp config/settings.example.yaml config/settings.yaml
+
+# Edit with your preferences
+nano config/settings.yaml  # or your favorite editor
 ```
 
-4. **Run setup script**
+**Available Settings:**
+
+```yaml
+# Database file location
+db_path: "sankash.duckdb"
+
+# Default currency for new accounts
+default_currency: "EUR"  # Options: EUR, USD, GBP
+
+# Date format for imports and display
+date_format: "%Y-%m-%d"
+
+# Number of transactions to process at once during import
+import_chunk_size: 1000
+```
+
+### How Settings Work with setup.py
+
+When you run `uv run python scripts/setup.py`:
+
+1. **Looks for** `config/settings.yaml`
+2. **If found:** Uses your custom settings (especially `db_path`)
+3. **If not found:** Uses defaults (shown above)
+4. **Creates database** at the location specified by `db_path`
+
+**Example - Custom Database Location:**
+
+```yaml
+# config/settings.yaml
+db_path: "/Users/you/finance-data/sankash.duckdb"
+default_currency: "USD"
+```
+
+Then running setup will create the database at your custom location:
 
 ```bash
-python scripts/setup.py
+uv run python scripts/setup.py
+# Output: 📊 Initializing database at: /Users/you/finance-data/sankash.duckdb
 ```
 
-This will:
-- Create the database file
-- Initialize the schema
-- Seed default categories
-
-5. **Start the app**
-
-```bash
-reflex run
-```
-
-The app will open at `http://localhost:3000`
+**Note:** Settings file is completely optional! The defaults work great for most users. Only create `settings.yaml` if you need to customize the database location or default currency.
 
 ## First Steps
 
@@ -62,9 +128,12 @@ The app will open at `http://localhost:3000`
 
 ### 2. Import Transactions
 
-#### Prepare Your CSV
+Sankash supports importing from **Standard CSV**, **Deutsche Bank**, or **ING** bank exports.
 
-Your CSV should have these columns:
+#### Option A: Standard CSV Format
+
+Prepare a CSV with these columns:
+
 ```csv
 date,payee,notes,amount
 2024-01-15,Grocery Store,Weekly shopping,-45.50
@@ -78,13 +147,26 @@ date,payee,notes,amount
 - `notes`: Optional notes
 - `amount`: Negative for expenses, positive for income
 
+#### Option B: Bank Export Files
+
+You can directly import raw exports from:
+
+- **Deutsche Bank**: Semicolon-separated, German decimal format (comma), date format DD.MM.YYYY
+- **ING**: Semicolon-separated with metadata rows, German number format (1.234,56)
+
+The app automatically converts these formats to the standard format.
+
 #### Import Process
 
-- Go to **Import** page
-- Select your account
-- Upload CSV file
-- Click "Preview" to verify data
-- Click "Import" to import transactions
+1. Go to **Import** page
+2. Select your account
+3. **Select bank format**:
+   - "Standard CSV" for pre-formatted files
+   - "Deutsche Bank" for Deutsche Bank exports
+   - "ING" for ING bank exports
+4. Upload CSV file
+5. Click "Preview" to verify data
+6. Click "Import" to import transactions
 
 ### 3. Categorize Transactions
 
@@ -144,6 +226,7 @@ reflex run
 The setup creates these categories:
 
 **Expenses:**
+
 - Groceries
 - Dining Out
 - Transportation
@@ -155,6 +238,7 @@ The setup creates these categories:
 - Other
 
 **Income:**
+
 - Income
 - Salary (sub-category)
 - Investment (sub-category)
@@ -164,6 +248,7 @@ The setup creates these categories:
 ### Filtering Transactions
 
 Use filters to find specific transactions:
+
 - **Date range**: Last 30 days button or custom dates
 - **Amount range**: Min/max amount
 - **Uncategorized only**: Focus on transactions needing categories
@@ -171,6 +256,7 @@ Use filters to find specific transactions:
 ### Rule Priority
 
 Higher priority rules run first. Use this for:
+
 - Specific rules (priority 10): "Amazon Prime" → "Subscriptions"
 - General rules (priority 5): "Amazon" → "Shopping"
 
@@ -183,32 +269,45 @@ Higher priority rules run first. Use this for:
 
 ## Troubleshooting
 
-**Database not found**
+### ❌ "Table with name accounts does not exist!"
+
+This is the most common error - it means you haven't initialized the database yet.
+
+**Solution:**
+
 ```bash
-# Re-run setup
+# Stop the app (Ctrl+C if running)
+# Run the setup script
+python scripts/setup.py
+
+# Start the app again
+reflex run
+```
+
+The setup script **must** be run before first use!
+
+---
+
+### Database not found or corrupted
+
+```bash
+# Delete and recreate database
+rm sankash.duckdb
 python scripts/setup.py
 ```
 
-**Import fails**
+### Import fails
+
 - Check CSV format (date, payee, notes, amount)
 - Ensure dates are YYYY-MM-DD
 - Verify account is selected
+- Check file is UTF-8 encoded
 
-**Rules not applying**
+### Rules not applying
+
 - Check rule is active (green badge)
 - Test rule with "Test" button
 - Check priority order
 - Verify condition matches payee format
-
-## Configuration
-
-Edit `config/settings.yaml`:
-
-```yaml
-db_path: "sankash.duckdb"
-default_currency: "EUR"
-date_format: "%Y-%m-%d"
-import_chunk_size: 1000
-```
 
 Happy budgeting! 💰

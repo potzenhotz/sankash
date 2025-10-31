@@ -89,6 +89,75 @@ def delete_category(db_path: str, category_id: int) -> None:
     )
 
 
+def get_parent_categories(db_path: str) -> pl.DataFrame:
+    """Get all parent categories (categories with no parent) - pure function."""
+    return execute_query(
+        db_path,
+        "SELECT * FROM categories WHERE parent_category IS NULL ORDER BY name"
+    )
+
+
+def get_subcategories(db_path: str, parent_name: str) -> pl.DataFrame:
+    """Get all subcategories for a given parent - pure function."""
+    return execute_query(
+        db_path,
+        "SELECT * FROM categories WHERE parent_category = $parent_name ORDER BY name",
+        {"parent_name": parent_name}
+    )
+
+
+def get_category_hierarchy(db_path: str) -> list[dict]:
+    """
+    Get categories organized in hierarchy - pure function.
+
+    Returns list of dicts with parent categories and their children.
+    Format: [{"parent": {...}, "children": [...]}, ...]
+    """
+    all_categories = get_categories(db_path).to_dicts()
+
+    # Separate parents and children
+    parents = [c for c in all_categories if c.get("parent_category") is None]
+    children_by_parent = {}
+
+    for cat in all_categories:
+        parent = cat.get("parent_category")
+        if parent:
+            if parent not in children_by_parent:
+                children_by_parent[parent] = []
+            children_by_parent[parent].append(cat)
+
+    # Build hierarchy
+    hierarchy = []
+    for parent in parents:
+        hierarchy.append({
+            "parent": parent,
+            "children": children_by_parent.get(parent["name"], [])
+        })
+
+    return hierarchy
+
+
+def get_category_display_name(db_path: str, category_name: str | None) -> str:
+    """
+    Get full display name for category (Parent > Child or just Parent).
+
+    Pure function that returns formatted category name.
+    """
+    if not category_name:
+        return "Uncategorized"
+
+    cat_df = get_category_by_name(db_path, category_name)
+    if len(cat_df) == 0:
+        return category_name
+
+    cat = cat_df.to_dicts()[0]
+    parent = cat.get("parent_category")
+
+    if parent:
+        return f"{parent} > {category_name}"
+    return category_name
+
+
 def seed_default_categories(db_path: str) -> None:
     """Seed database with default categories."""
     default_categories = [

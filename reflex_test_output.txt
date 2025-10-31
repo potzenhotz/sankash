@@ -1,0 +1,21 @@
+================================================
+Testing Reflex App Startup
+================================================
+
+Starting Reflex app...
+Reflex app started with PID: 12270
+
+Waiting for app to start...
+✅ App is listening on a port!
+   Port detected: redwood-broker
+
+
+Stopping Reflex app (PID: 12270)...
+./scripts/test_reflex.sh: line 52: 12270 Terminated: 15          .venv/bin/reflex run
+App stopped.
+
+================================================
+✅ SUCCESS: Reflex app started successfully!
+================================================
+
+The app started and was listening on port redwood-broker
