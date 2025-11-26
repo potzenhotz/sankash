@@ -141,7 +141,14 @@ def transaction_row(transaction: dict) -> rx.Component:
                 on_change=lambda: TransactionState.toggle_selection(transaction["id"]),
             )
         ),
-        rx.table.cell(transaction["date"]),
+        rx.table.cell(
+            rx.text(
+                transaction["date"],
+                size="2",
+                weight="medium",
+            ),
+            min_width="110px",
+        ),
         rx.table.cell(transaction["payee"]),
         rx.table.cell(transaction.get("notes", "-")),
         rx.table.cell(
@@ -200,10 +207,48 @@ def transactions_table() -> rx.Component:
                 rx.table.header(
                     rx.table.row(
                         rx.table.column_header_cell(""),
-                        rx.table.column_header_cell("Date"),
+                        rx.table.column_header_cell(
+                            rx.hstack(
+                                rx.text("Date", size="2", weight="bold"),
+                                rx.button(
+                                    rx.icon(
+                                        rx.cond(
+                                            (TransactionState.sort_by == "date") & (TransactionState.sort_order == "asc"),
+                                            "arrow-up",
+                                            "arrow-down",
+                                        ),
+                                        size=14,
+                                    ),
+                                    on_click=TransactionState.toggle_sort_by_date,
+                                    size="1",
+                                    variant="ghost",
+                                ),
+                                spacing="1",
+                                align="center",
+                            ),
+                        ),
                         rx.table.column_header_cell("Payee"),
                         rx.table.column_header_cell("Notes"),
-                        rx.table.column_header_cell("Amount"),
+                        rx.table.column_header_cell(
+                            rx.hstack(
+                                rx.text("Amount", size="2", weight="bold"),
+                                rx.button(
+                                    rx.icon(
+                                        rx.cond(
+                                            (TransactionState.sort_by == "amount") & (TransactionState.sort_order == "asc"),
+                                            "arrow-up",
+                                            "arrow-down",
+                                        ),
+                                        size=14,
+                                    ),
+                                    on_click=TransactionState.toggle_sort_by_amount,
+                                    size="1",
+                                    variant="ghost",
+                                ),
+                                spacing="1",
+                                align="center",
+                            ),
+                        ),
                         rx.table.column_header_cell("Category"),
                         rx.table.column_header_cell("Transfer"),
                     ),

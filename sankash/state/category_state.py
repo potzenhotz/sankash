@@ -25,6 +25,10 @@ class CategoryState(BaseState):
     form_color: str = "#6366f1"
     editing_id: int | None = None
 
+    # Inline subcategory creation
+    adding_subcategory_to: str = ""  # Parent name when adding inline subcategory
+    inline_subcategory_name: str = ""
+
     # Delete confirmation
     confirm_delete_id: int | None = None
 
@@ -33,6 +37,11 @@ class CategoryState(BaseState):
         """Get list of parent categories for dropdown."""
         parents = [c for c in self.categories if c.get("parent_category") is None]
         return ["(None)"] + [p["name"] for p in parents]
+
+    @rx.var
+    def parent_categories(self) -> list[dict]:
+        """Get only parent categories (no parent_category field)."""
+        return [c for c in self.categories if c.get("parent_category") is None]
 
     @rx.var
     def is_editing(self) -> bool:
@@ -48,8 +57,25 @@ class CategoryState(BaseState):
         try:
             # Load all categories
             df = category_service.get_categories(self.db_path)
-            self.categories = df.to_dicts()
-            logger.info(f"Loaded {len(self.categories)} categories")
+            categories = df.to_dicts()
+            logger.info(f"Loaded {len(categories)} categories")
+
+            # Create a map of parent names to colors for quick lookup
+            parent_colors = {
+                cat["name"]: cat["color"]
+                for cat in categories
+                if cat.get("parent_category") is None
+            }
+
+            # Update subcategories to use their parent's color
+            for cat in categories:
+                if cat.get("parent_category"):
+                    parent_name = cat["parent_category"]
+                    if parent_name in parent_colors:
+                        cat["color"] = parent_colors[parent_name]
+                        logger.info(f"Subcategory '{cat['name']}' inheriting color from '{parent_name}': {cat['color']}")
+
+            self.categories = categories
 
             # Build hierarchy
             self.hierarchy = category_service.get_category_hierarchy(self.db_path)
@@ -78,10 +104,18 @@ class CategoryState(BaseState):
             parent = None if self.form_parent_category == "(None)" or not self.form_parent_category else self.form_parent_category
             logger.info(f"Prepared parent category: {parent}")
 
+            # If this is a subcategory, inherit parent's color
+            if parent:
+                color = category_service.get_parent_color(self.db_path, parent)
+                logger.info(f"Subcategory inheriting color from parent '{parent}': {color}")
+            else:
+                color = self.form_color
+                logger.info(f"Parent category using selected color: {color}")
+
             category = Category(
                 name=self.form_name,
                 parent_category=parent,
-                color=self.form_color,
+                color=color,
             )
 
             if self.editing_id:
@@ -104,6 +138,53 @@ class CategoryState(BaseState):
             log_error("create_or_update_category", e)
         finally:
             self.loading = False
+
+    def add_subcategory(self, parent_name: str) -> None:
+        """Start adding a subcategory inline."""
+        logger.info(f"Starting inline subcategory creation under '{parent_name}'")
+        self.adding_subcategory_to = parent_name
+        self.inline_subcategory_name = ""
+        self.error = ""
+        self.success = ""
+
+    def create_inline_subcategory(self) -> None:
+        """Create subcategory from inline form."""
+        if not self.inline_subcategory_name or not self.adding_subcategory_to:
+            self.error = "Subcategory name is required"
+            return
+
+        self.loading = True
+        self.error = ""
+        self.success = ""
+
+        try:
+            # Get parent's color
+            color = category_service.get_parent_color(self.db_path, self.adding_subcategory_to)
+
+            category = Category(
+                name=self.inline_subcategory_name,
+                parent_category=self.adding_subcategory_to,
+                color=color,
+            )
+
+            new_id = category_service.create_category(self.db_path, category)
+            self.success = f"Subcategory '{self.inline_subcategory_name}' created successfully"
+            logger.info(f"Inline subcategory created with ID {new_id}")
+
+            # Clear inline form
+            self.cancel_inline_subcategory()
+            self.load_categories()
+        except Exception as e:
+            self.error = f"Failed to create subcategory: {str(e)}"
+            log_error("create_inline_subcategory", e)
+        finally:
+            self.loading = False
+
+    def cancel_inline_subcategory(self) -> None:
+        """Cancel inline subcategory creation."""
+        self.adding_subcategory_to = ""
+        self.inline_subcategory_name = ""
+        self.error = ""
 
     def edit_category(self, category_id: int) -> None:
         """Load category data into form for editing."""

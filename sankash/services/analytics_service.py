@@ -8,6 +8,25 @@ import polars as pl
 from sankash.core.database import execute_query
 
 
+def get_available_months(db_path: str) -> pl.DataFrame:
+    """
+    Get distinct months/years that have transaction data (pure function).
+
+    Returns DataFrame with columns: year, month, transaction_count
+    Sorted by year and month descending (most recent first).
+    """
+    query = """
+    SELECT
+        DISTINCT YEAR(date) as year,
+        MONTH(date) as month,
+        COUNT(*) as transaction_count
+    FROM transactions
+    GROUP BY YEAR(date), MONTH(date)
+    ORDER BY year DESC, month DESC
+    """
+    return execute_query(db_path, query)
+
+
 def get_transactions_for_period(
     db_path: str,
     start_date: date,

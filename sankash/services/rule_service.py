@@ -28,6 +28,7 @@ def parse_rule_from_row(row: dict) -> Rule:
         name=row["name"],
         priority=row["priority"],
         is_active=row["is_active"],
+        match_type=row.get("match_type", "any"),  # Default to "any" for backward compatibility
         conditions=json.loads(row["conditions"]) if isinstance(row["conditions"], str) else row["conditions"],
         actions=json.loads(row["actions"]) if isinstance(row["actions"], str) else row["actions"],
     )
@@ -79,13 +80,18 @@ def evaluate_rule(rule: Rule, transaction: Transaction) -> bool:
     """
     Evaluate if transaction matches rule conditions (pure function).
 
-    All conditions must match (AND logic).
+    Supports both AND (all) and OR (any) logic based on rule.match_type.
     """
     if not rule.conditions:
         return False
 
     evaluators = [create_condition_evaluator(cond) for cond in rule.conditions]
-    return all(evaluator(transaction) for evaluator in evaluators)
+
+    # Use AND logic if match_type is "all", OR logic if "any"
+    if rule.match_type == "any":
+        return any(evaluator(transaction) for evaluator in evaluators)
+    else:
+        return all(evaluator(transaction) for evaluator in evaluators)
 
 
 def apply_rule_actions(db_path: str, rule: Rule, transaction_id: int) -> None:
@@ -173,13 +179,14 @@ def create_rule(db_path: str, rule: Rule) -> int:
     """Create new rule and return its ID."""
     result = execute_query(
         db_path,
-        """INSERT INTO rules (name, priority, is_active, conditions, actions)
-        VALUES ($name, $priority, $is_active, $conditions, $actions)
+        """INSERT INTO rules (name, priority, is_active, match_type, conditions, actions)
+        VALUES ($name, $priority, $is_active, $match_type, $conditions, $actions)
         RETURNING id""",
         {
             "name": rule.name,
             "priority": rule.priority,
             "is_active": rule.is_active,
+            "match_type": rule.match_type,
             "conditions": json.dumps([c.model_dump() for c in rule.conditions]),
             "actions": json.dumps([a.model_dump() for a in rule.actions]),
         }
@@ -195,6 +202,7 @@ def update_rule(db_path: str, rule_id: int, rule: Rule) -> None:
         SET name = $name,
             priority = $priority,
             is_active = $is_active,
+            match_type = $match_type,
             conditions = $conditions,
             actions = $actions
         WHERE id = $id""",
@@ -203,6 +211,7 @@ def update_rule(db_path: str, rule_id: int, rule: Rule) -> None:
             "name": rule.name,
             "priority": rule.priority,
             "is_active": rule.is_active,
+            "match_type": rule.match_type,
             "conditions": json.dumps([c.model_dump() for c in rule.conditions]),
             "actions": json.dumps([a.model_dump() for a in rule.actions]),
         }
@@ -212,6 +221,26 @@ def update_rule(db_path: str, rule_id: int, rule: Rule) -> None:
 def delete_rule(db_path: str, rule_id: int) -> None:
     """Delete rule."""
     execute_command(db_path, "DELETE FROM rules WHERE id = $id", {"id": rule_id})
+
+
+def count_matching_transactions(db_path: str, rule: Rule) -> int:
+    """
+    Count how many transactions match a rule.
+
+    Returns the count of matching transactions.
+    """
+    from sankash.services.transaction_service import get_transactions
+
+    # Get all transactions
+    transactions_df = get_transactions(db_path)
+
+    if transactions_df.is_empty():
+        return 0
+
+    transactions = [Transaction(**row) for row in transactions_df.to_dicts()]
+
+    # Count matching transactions
+    return sum(1 for t in transactions if evaluate_rule(rule, t))
 
 
 def create_rule_from_transaction(

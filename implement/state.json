@@ -1,8 +1,8 @@
 {
   "session_id": "category-management-20251029",
   "created_at": "2025-10-29T22:10:00Z",
-  "current_phase": "Phase 8: Enhanced Visualization Complete",
-  "current_task": "Production ready with beautiful, professional UI",
+  "current_phase": "Phase 14: Rule UI Auto-Refresh Fixed",
+  "current_task": "Fixed rules page not updating after create/apply operations",
   "completed_tasks": [
     "Enhanced category service with hierarchy functions",
     "Created CategoryState with full CRUD operations",
@@ -21,7 +21,35 @@
     "Integrated Plotly charts with Reflex",
     "Enhanced Sankey with beautiful color palette",
     "Added semi-transparent links and professional styling",
-    "Implemented custom hover templates with currency formatting"
+    "Implemented custom hover templates with currency formatting",
+    "Redesigned category display with visual hierarchy",
+    "Made parent categories prominent (larger text, color background)",
+    "Added subtle subcategory styling (indented, tree connector, color dots)",
+    "Removed 'under xyz' badges in favor of visual nesting",
+    "Added get_available_months() service function",
+    "Implemented current month as default dashboard selection",
+    "Created data-driven month/year selectors showing only available periods",
+    "Dashboard now shows most recent month with data if current month has none",
+    "Added add_subcategory() method to CategoryState",
+    "Implemented plus button next to parent categories for inline subcategory creation",
+    "Removed Parent Category dropdown from Add New Category form",
+    "Added info callout showing parent name when creating subcategory",
+    "Streamlined UX - subcategories now created directly from parent category row",
+    "Added inline subcategory state tracking (adding_subcategory_to, inline_subcategory_name)",
+    "Created inline_subcategory_form() component with check/cancel buttons",
+    "Implemented create_inline_subcategory() and cancel_inline_subcategory() methods",
+    "Inline form appears directly below parent category when plus is clicked",
+    "Form aligns with subcategories using indentation and tree connector",
+    "Added sort_by and sort_order state to TransactionState",
+    "Implemented toggle_sort_by_date() and toggle_sort_by_amount() methods",
+    "Enhanced date column with min-width (110px) for better readability",
+    "Added sortable column headers with up/down arrow icons",
+    "Categories now sorted alphabetically in both rules and transactions dropdowns",
+    "Fixed UI not refreshing after creating rules - added self.rules = list(self.rules)",
+    "Fixed UI not refreshing after applying rules - added explicit state update",
+    "Fixed UI not refreshing after deleting rules - added list reassignment",
+    "Fixed UI not refreshing after toggling rule active status - added state update",
+    "Fixed UI not refreshing after updating rule priority - added list reassignment"
   ],
   "checkpoints": [
     {
@@ -63,6 +91,36 @@
       "phase": "Phase 8",
       "timestamp": "2025-10-30T23:15:00Z",
       "description": "Sankey diagram enhanced with professional styling and colors"
+    },
+    {
+      "phase": "Phase 9",
+      "timestamp": "2025-10-31T21:15:00Z",
+      "description": "Category display redesigned with visual hierarchy and subtle colors"
+    },
+    {
+      "phase": "Phase 10",
+      "timestamp": "2025-11-02T20:21:00Z",
+      "description": "Dashboard month selector enhanced with current month default and data-driven options"
+    },
+    {
+      "phase": "Phase 11",
+      "timestamp": "2025-11-02T20:27:00Z",
+      "description": "Inline subcategory creation with plus button, removed parent dropdown from form"
+    },
+    {
+      "phase": "Phase 12",
+      "timestamp": "2025-11-02T20:40:00Z",
+      "description": "Inline subcategory input appears contextually at parent category location"
+    },
+    {
+      "phase": "Phase 13",
+      "timestamp": "2025-11-02T21:00:00Z",
+      "description": "Transaction table enhanced with sortable columns and better date formatting"
+    },
+    {
+      "phase": "Phase 14",
+      "timestamp": "2025-11-02T21:17:00Z",
+      "description": "Fixed rules page UI not auto-refreshing after create/apply/delete operations"
     }
   ]
 }

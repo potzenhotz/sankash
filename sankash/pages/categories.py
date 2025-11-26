@@ -27,46 +27,105 @@ COLOR_PALETTE = [
 ]
 
 
-def color_swatch(color: str) -> rx.Component:
-    """Individual color swatch button."""
+def inline_subcategory_form() -> rx.Component:
+    """Inline form for adding subcategory."""
     return rx.box(
+        rx.hstack(
+            # Indentation to align with subcategories
+            rx.box(width="24px"),
+            rx.text("└─", size="2", color="gray"),
+            # Input field
+            rx.input(
+                placeholder="Enter subcategory name...",
+                value=CategoryState.inline_subcategory_name,
+                on_change=CategoryState.set_inline_subcategory_name,
+                size="2",
+                flex="1",
+                auto_focus=True,
+            ),
+            # Action buttons
+            rx.button(
+                rx.icon("check", size=14),
+                on_click=CategoryState.create_inline_subcategory,
+                size="1",
+                color="green",
+                loading=CategoryState.loading,
+            ),
+            rx.button(
+                rx.icon("x", size=14),
+                on_click=CategoryState.cancel_inline_subcategory,
+                size="1",
+                variant="soft",
+            ),
+            spacing="2",
+            width="100%",
+            align="center",
+        ),
+        padding="8px 12px",
+        background="rgba(0, 128, 0, 0.05)",
+        border_radius="6px",
+        margin_top="4px",
+    )
+
+
+def color_swatch(color: str) -> rx.Component:
+    """Individual color swatch button - modern design."""
+    return rx.box(
+        # Check icon when selected
         rx.cond(
             CategoryState.form_color == color,
-            rx.icon("check", size=16, color="white"),
+            rx.icon("check", size=18, color="white", weight="bold"),
         ),
         background=color,
-        width="40px",
-        height="40px",
-        border_radius="6px",
+        width="48px",
+        height="48px",
+        border_radius="12px",
         cursor="pointer",
         border=rx.cond(
             CategoryState.form_color == color,
-            "2px solid #000",
-            "1px solid #e5e7eb"
+            "3px solid #000",
+            "2px solid rgba(0, 0, 0, 0.08)"
         ),
         display="flex",
         align_items="center",
         justify_content="center",
         on_click=CategoryState.select_color(color),
+        box_shadow=rx.cond(
+            CategoryState.form_color == color,
+            "0 4px 12px rgba(0, 0, 0, 0.15)",
+            "0 2px 4px rgba(0, 0, 0, 0.05)"
+        ),
         _hover={
-            "transform": "scale(1.1)",
-            "box_shadow": "0 4px 6px rgba(0, 0, 0, 0.1)",
+            "transform": "translateY(-2px)",
+            "box_shadow": "0 6px 16px rgba(0, 0, 0, 0.12)",
+            "border": "2px solid rgba(0, 0, 0, 0.2)",
         },
-        transition="all 0.2s ease",
+        transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
     )
 
 
 def color_palette_picker() -> rx.Component:
-    """Color palette with preset colors in a grid."""
+    """Modern color palette with preset colors."""
     return rx.vstack(
-        rx.text("Quick Color Palette", size="2", weight="bold"),
-        rx.grid(
-            *[color_swatch(color) for color in COLOR_PALETTE],
-            columns="8",
+        rx.hstack(
+            rx.icon("palette", size=18),
+            rx.text("Quick Colors", size="3", weight="bold"),
             spacing="2",
-            width="100%",
+            align="center",
         ),
-        spacing="2",
+        rx.box(
+            rx.grid(
+                *[color_swatch(color) for color in COLOR_PALETTE],
+                columns="8",
+                spacing="3",
+                width="100%",
+            ),
+            padding="12px",
+            border_radius="12px",
+            background="rgba(0, 0, 0, 0.02)",
+            border="1px solid rgba(0, 0, 0, 0.06)",
+        ),
+        spacing="3",
         width="100%",
     )
 
@@ -95,46 +154,56 @@ def category_form() -> rx.Component:
                 spacing="1",
                 width="100%",
             ),
-            # Parent category dropdown
-            rx.vstack(
-                rx.text("Parent Category (Optional)", size="2", weight="bold"),
-                rx.select(
-                    CategoryState.parent_category_options,
-                    placeholder="Select parent",
-                    value=CategoryState.form_parent_category,
-                    on_change=CategoryState.set_form_parent_category,
-                ),
-                rx.text(
-                    "Leave as '(None)' for a top-level category",
+            # Show parent info if adding subcategory
+            rx.cond(
+                (CategoryState.form_parent_category != "(None)") & (CategoryState.form_parent_category != ""),
+                rx.callout(
+                    rx.text(
+                        ["Adding subcategory under: ", rx.text(CategoryState.form_parent_category, weight="bold")],
+                        size="2",
+                    ),
+                    icon="info",
+                    color_scheme="blue",
                     size="1",
-                    color="gray",
                 ),
-                spacing="1",
-                width="100%",
             ),
-            # Color picker
-            rx.vstack(
-                rx.text("Color", size="2", weight="bold"),
-                rx.hstack(
-                    rx.input(
-                        type="color",
-                        value=CategoryState.form_color,
-                        on_change=CategoryState.set_form_color,
-                        width="80px",
+            # Color picker (only for parent categories)
+            rx.cond(
+                (CategoryState.form_parent_category == "(None)") | (CategoryState.form_parent_category == ""),
+                rx.vstack(
+                    rx.vstack(
+                        rx.text("Color", size="2", weight="bold"),
+                        rx.hstack(
+                            rx.input(
+                                type="color",
+                                value=CategoryState.form_color,
+                                on_change=CategoryState.set_form_color,
+                                width="80px",
+                            ),
+                            rx.input(
+                                value=CategoryState.form_color,
+                                on_change=CategoryState.set_form_color,
+                                placeholder="#6366f1",
+                                width="120px",
+                            ),
+                            spacing="2",
+                        ),
+                        spacing="1",
+                        width="100%",
                     ),
-                    rx.input(
-                        value=CategoryState.form_color,
-                        on_change=CategoryState.set_form_color,
-                        placeholder="#6366f1",
-                        width="120px",
-                    ),
-                    spacing="2",
+                    # Color palette picker
+                    color_palette_picker(),
+                    spacing="3",
+                    width="100%",
                 ),
-                spacing="1",
-                width="100%",
+                # Info for subcategories
+                rx.callout(
+                    "Subcategories inherit their parent category's color",
+                    icon="info",
+                    color_scheme="blue",
+                    size="1",
+                ),
             ),
-            # Color palette picker
-            color_palette_picker(),
             # Messages
             rx.cond(
                 CategoryState.error != "",
@@ -174,72 +243,258 @@ def category_form() -> rx.Component:
     )
 
 
-def category_item(category: dict, is_subcategory: bool = False) -> rx.Component:
-    """Single category item (functional component)."""
-    return rx.card(
+def subcategory_item(category: dict) -> rx.Component:
+    """Subcategory item with indentation and subtle styling."""
+    return rx.hstack(
+        # Indentation spacer
+        rx.box(width="24px"),
+        # Tree connector
+        rx.text("└─", size="2", color="gray"),
+        # Subtle color dot
+        rx.box(
+            width="8px",
+            height="8px",
+            background=category["color"],
+            border_radius="50%",
+            flex_shrink="0",
+        ),
+        # Category name
+        rx.text(
+            category["name"],
+            size="3",
+            weight="medium",
+            flex="1",
+        ),
+        # Actions
         rx.hstack(
-            # Color indicator
-            rx.box(
-                width="4px",
-                height="100%",
-                background=category["color"],
-                border_radius="2px",
+            rx.button(
+                rx.icon("pencil", size=14),
+                on_click=lambda: CategoryState.edit_category(category["id"]),
+                size="1",
+                variant="ghost",
             ),
-            # Category info
-            rx.vstack(
-                rx.hstack(
-                    rx.cond(
-                        is_subcategory,
-                        rx.text("  └─", size="2", color="gray"),
-                    ),
-                    rx.text(
-                        category["name"],
-                        size="3",
-                        weight="bold",
-                    ),
-                    rx.cond(
-                        category.get("parent_category") is not None,
-                        rx.badge(
-                            f"under {category['parent_category']}",
-                            variant="soft",
-                            size="1",
-                        ),
-                    ),
-                    spacing="2",
+            rx.button(
+                rx.icon("trash-2", size=14),
+                on_click=lambda: CategoryState.confirm_delete(category["id"]),
+                size="1",
+                variant="ghost",
+                color="red",
+            ),
+            spacing="1",
+        ),
+        spacing="2",
+        width="100%",
+        align="center",
+        padding="8px 12px",
+        border_radius="6px",
+        _hover={
+            "background": "rgba(0, 0, 0, 0.02)",
+        },
+    )
+
+
+def parent_category_item(parent: dict) -> rx.Component:
+    """Parent category with prominent styling."""
+    return rx.hstack(
+        # Prominent color indicator (circle)
+        rx.box(
+            width="12px",
+            height="12px",
+            background=parent["color"],
+            border_radius="50%",
+            flex_shrink="0",
+        ),
+        # Parent category name (larger, bolder)
+        rx.text(
+            parent["name"],
+            size="4",
+            weight="bold",
+            flex="1",
+        ),
+        # Actions
+        rx.hstack(
+            rx.tooltip(
+                rx.button(
+                    rx.icon("plus", size=16),
+                    on_click=lambda: CategoryState.add_subcategory(parent["name"]),
+                    size="1",
+                    variant="soft",
+                    color="green",
                 ),
-                spacing="1",
-                flex="1",
+                content="Add subcategory",
             ),
-            # Actions
-            rx.hstack(
+            rx.tooltip(
                 rx.button(
                     rx.icon("pencil", size=16),
-                    on_click=lambda: CategoryState.edit_category(category["id"]),
+                    on_click=lambda: CategoryState.edit_category(parent["id"]),
                     size="1",
                     variant="soft",
                 ),
+                content="Edit category",
+            ),
+            rx.tooltip(
                 rx.button(
                     rx.icon("trash-2", size=16),
-                    on_click=lambda: CategoryState.confirm_delete(category["id"]),
+                    on_click=lambda: CategoryState.confirm_delete(parent["id"]),
                     size="1",
                     variant="soft",
                     color="red",
                 ),
-                spacing="2",
+                content="Delete category",
             ),
-            spacing="3",
-            width="100%",
-            align="center",
+            spacing="2",
         ),
+        spacing="3",
         width="100%",
+        align="center",
+        padding="12px",
+        border_radius="8px",
+        background=f"color-mix(in srgb, {parent['color']} 5%, transparent)",
+        border=f"1px solid color-mix(in srgb, {parent['color']} 20%, transparent)",
     )
 
 
-def category_display_item(category: dict) -> rx.Component:
-    """Category display item with visual hierarchy indication."""
-    return category_item(
-        category,
-        is_subcategory=category.get("parent_category") is not None
+def subcategory_item_filtered(category: dict, parent_name: str) -> rx.Component:
+    """Render subcategory only if it belongs to the given parent."""
+    return rx.cond(
+        category.get("parent_category") == parent_name,
+        subcategory_item(category),
+        rx.box(),  # Empty if not matching
+    )
+
+
+def subcategory_with_parent_color(category: dict, parent_color: str) -> rx.Component:
+    """Subcategory item using parent's color."""
+    return rx.hstack(
+        # Indentation spacer
+        rx.box(width="24px"),
+        # Tree connector
+        rx.text("└─", size="2", color="gray"),
+        # Subtle color dot (using parent color)
+        rx.box(
+            width="8px",
+            height="8px",
+            background=parent_color,
+            border_radius="50%",
+            flex_shrink="0",
+        ),
+        # Category name
+        rx.text(
+            category["name"],
+            size="3",
+            weight="medium",
+            flex="1",
+        ),
+        # Actions
+        rx.hstack(
+            rx.button(
+                rx.icon("pencil", size=14),
+                on_click=lambda: CategoryState.edit_category(category["id"]),
+                size="1",
+                variant="ghost",
+            ),
+            rx.button(
+                rx.icon("trash-2", size=14),
+                on_click=lambda: CategoryState.confirm_delete(category["id"]),
+                size="1",
+                variant="ghost",
+                color="red",
+            ),
+            spacing="1",
+        ),
+        spacing="2",
+        width="100%",
+        align="center",
+        padding="8px 12px",
+        border_radius="6px",
+        _hover={
+            "background": "rgba(0, 0, 0, 0.02)",
+        },
+    )
+
+
+def parent_with_children_card(parent: dict) -> rx.Component:
+    """Display parent category with its children grouped in a card."""
+    return rx.card(
+        rx.vstack(
+            # Parent category as header
+            rx.hstack(
+                # Prominent color indicator
+                rx.box(
+                    width="12px",
+                    height="12px",
+                    background=parent["color"],
+                    border_radius="50%",
+                    flex_shrink="0",
+                ),
+                # Parent name (header style)
+                rx.text(
+                    parent["name"],
+                    size="5",
+                    weight="bold",
+                    flex="1",
+                ),
+                # Actions
+                rx.hstack(
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("plus", size=16),
+                            on_click=lambda: CategoryState.add_subcategory(parent["name"]),
+                            size="1",
+                            variant="soft",
+                            color="green",
+                        ),
+                        content="Add subcategory",
+                    ),
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("pencil", size=16),
+                            on_click=lambda: CategoryState.edit_category(parent["id"]),
+                            size="1",
+                            variant="soft",
+                        ),
+                        content="Edit category",
+                    ),
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("trash-2", size=16),
+                            on_click=lambda: CategoryState.confirm_delete(parent["id"]),
+                            size="1",
+                            variant="soft",
+                            color="red",
+                        ),
+                        content="Delete category",
+                    ),
+                    spacing="2",
+                ),
+                spacing="3",
+                width="100%",
+                align="center",
+            ),
+            # Divider
+            rx.divider(),
+            # Inline subcategory form (shown when adding to this parent)
+            rx.cond(
+                CategoryState.adding_subcategory_to == parent["name"],
+                inline_subcategory_form(),
+            ),
+            # Children categories (using parent color)
+            rx.vstack(
+                rx.foreach(
+                    CategoryState.categories,
+                    lambda cat: rx.cond(
+                        cat.get("parent_category") == parent["name"],
+                        subcategory_with_parent_color(cat, parent["color"]),
+                        rx.fragment(),
+                    ),
+                ),
+                spacing="1",
+                width="100%",
+            ),
+            spacing="3",
+            width="100%",
+        ),
+        width="100%",
     )
 
 
@@ -306,10 +561,10 @@ def categories_page() -> rx.Component:
                                 rx.text("No categories yet. Create one to get started!", color="gray"),
                                 rx.vstack(
                                     rx.foreach(
-                                        CategoryState.categories,
-                                        category_display_item
+                                        CategoryState.parent_categories,
+                                        parent_with_children_card
                                     ),
-                                    spacing="3",
+                                    spacing="4",
                                     width="100%",
                                 ),
                             ),

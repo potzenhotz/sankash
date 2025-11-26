@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS rules (
     name VARCHAR NOT NULL,
     priority INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    match_type VARCHAR NOT NULL DEFAULT 'any',
     conditions JSON NOT NULL,
     actions JSON NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

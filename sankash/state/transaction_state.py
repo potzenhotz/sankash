@@ -29,6 +29,10 @@ class TransactionState(BaseState):
     filter_uncategorized_only: bool = False
     search_query: str = ""  # Quick search across payee, notes, category
 
+    # Sorting
+    sort_by: str = "date"  # "date" or "amount"
+    sort_order: str = "desc"  # "asc" or "desc"
+
     # Selection
     selected_ids: list[int] = []
     bulk_category: str = ""
@@ -87,11 +91,18 @@ class TransactionState(BaseState):
                 query = self.search_query.lower()
                 transactions = [
                     txn for txn in transactions
-                    if query in txn.get("payee", "").lower()
-                    or query in txn.get("notes", "").lower()
-                    or query in txn.get("category", "").lower()
-                    or query in txn.get("category_display", "").lower()
+                    if query in (txn.get("payee") or "").lower()
+                    or query in (txn.get("notes") or "").lower()
+                    or query in (txn.get("category") or "").lower()
+                    or query in (txn.get("category_display") or "").lower()
                 ]
+
+            # Apply sorting
+            reverse = self.sort_order == "desc"
+            if self.sort_by == "date":
+                transactions = sorted(transactions, key=lambda x: x.get("date", ""), reverse=reverse)
+            elif self.sort_by == "amount":
+                transactions = sorted(transactions, key=lambda x: float(x.get("amount", 0)), reverse=reverse)
 
             self.transactions = transactions
         except Exception as e:
@@ -115,6 +126,9 @@ class TransactionState(BaseState):
                 )
                 display_names.append(display_name)
                 display_map[display_name] = cat["name"]
+
+            # Sort categories alphabetically
+            display_names.sort()
 
             self.categories = display_names
             self.category_display_map = display_map
@@ -189,4 +203,26 @@ class TransactionState(BaseState):
         start = end - timedelta(days=30)
         self.filter_start_date = start.isoformat()
         self.filter_end_date = end.isoformat()
+        self.load_transactions()
+
+    def toggle_sort_by_date(self) -> None:
+        """Toggle date column sorting."""
+        if self.sort_by == "date":
+            # Toggle order
+            self.sort_order = "asc" if self.sort_order == "desc" else "desc"
+        else:
+            # Switch to date sorting, default descending
+            self.sort_by = "date"
+            self.sort_order = "desc"
+        self.load_transactions()
+
+    def toggle_sort_by_amount(self) -> None:
+        """Toggle amount column sorting."""
+        if self.sort_by == "amount":
+            # Toggle order
+            self.sort_order = "asc" if self.sort_order == "desc" else "desc"
+        else:
+            # Switch to amount sorting, default descending
+            self.sort_by = "amount"
+            self.sort_order = "desc"
         self.load_transactions()

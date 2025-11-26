@@ -64,5 +64,6 @@ class Rule(BaseModel):
     name: str
     priority: int = 0
     is_active: bool = True
+    match_type: str = "any"  # "all" for AND, "any" for OR
     conditions: list[RuleCondition] = Field(default_factory=list)
     actions: list[RuleAction] = Field(default_factory=list)

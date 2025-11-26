@@ -6,68 +6,172 @@ from sankash.components.layout import layout
 from sankash.state.rule_state import RuleState
 
 
+def condition_item(condition: dict, index: int) -> rx.Component:
+    """Single condition row with field, operator, value, and remove button."""
+    return rx.hstack(
+        rx.select(
+            ["payee", "amount", "notes"],
+            value=condition["field"],
+            on_change=lambda val: RuleState.update_condition_field(index, val),
+            size="2",
+        ),
+        rx.select(
+            ["contains", "equals", "<", ">"],
+            value=condition["operator"],
+            on_change=lambda val: RuleState.update_condition_operator(index, val),
+            size="2",
+        ),
+        rx.input(
+            placeholder="Value",
+            value=condition["value"],
+            on_change=lambda val: RuleState.update_condition_value(index, val),
+            size="2",
+            flex="1",
+        ),
+        rx.tooltip(
+            rx.button(
+                rx.icon("trash-2", size=16),
+                on_click=lambda: RuleState.remove_condition(index),
+                size="1",
+                variant="ghost",
+                color_scheme="red",
+            ),
+            content="Remove this condition",
+        ),
+        spacing="2",
+        width="100%",
+        align="center",
+    )
+
+
 def rule_form() -> rx.Component:
     """Rule creation form (functional component)."""
     return rx.card(
         rx.vstack(
-            rx.heading("Create New Rule", size="4"),
-            # Basic info
-            rx.input(
-                placeholder="Rule Name",
-                value=RuleState.form_name,
-                on_change=RuleState.set_form_name,
-            ),
             rx.hstack(
-                rx.input(
-                    type="number",
-                    placeholder="Priority",
-                    value=RuleState.form_priority,
-                    on_change=RuleState.set_form_priority,
+                rx.heading(
+                    rx.cond(
+                        RuleState.editing_id != None,
+                        "Edit Rule",
+                        "Create New Rule"
+                    ),
+                    size="4"
                 ),
-                rx.checkbox(
-                    "Active",
-                    checked=RuleState.form_is_active,
-                    on_change=RuleState.set_form_is_active,
+                rx.spacer(),
+                rx.cond(
+                    RuleState.editing_id != None,
+                    rx.button(
+                        "Cancel",
+                        on_click=RuleState.clear_form,
+                        size="2",
+                        variant="soft",
+                    ),
+                ),
+                width="100%",
+                align="center",
+            ),
+            # Rule name
+            rx.vstack(
+                rx.text("Rule Name", size="2", weight="bold"),
+                rx.input(
+                    placeholder="e.g., Groceries at Walmart",
+                    value=RuleState.form_name,
+                    on_change=RuleState.set_form_name,
+                    width="100%",
+                ),
+                spacing="1",
+                width="100%",
+            ),
+            # Match type selector
+            rx.divider(),
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("git-branch", size=18),
+                    rx.text("Match Type", size="3", weight="bold"),
+                    spacing="2",
+                    align="center",
+                ),
+                rx.radio(
+                    ["all", "any"],
+                    value=RuleState.form_match_type,
+                    on_change=RuleState.set_form_match_type,
+                    direction="row",
+                ),
+                rx.text(
+                    rx.cond(
+                        RuleState.form_match_type == "all",
+                        "Match ALL conditions (AND logic)",
+                        "Match ANY condition (OR logic)",
+                    ),
+                    size="1",
+                    color="gray",
                 ),
                 spacing="2",
                 width="100%",
             ),
-            # Condition
+            # Conditions section
             rx.divider(),
-            rx.heading("Condition", size="3"),
-            rx.hstack(
-                rx.select(
-                    ["payee", "amount", "notes"],
-                    value=RuleState.condition_field,
-                    on_change=RuleState.set_condition_field,
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("filter", size=18),
+                    rx.text("Conditions", size="3", weight="bold"),
+                    rx.spacer(),
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("plus", size=16),
+                            "Add Condition",
+                            on_click=RuleState.add_condition,
+                            size="2",
+                            variant="soft",
+                        ),
+                        content="Add a new condition to this rule",
+                    ),
+                    spacing="2",
+                    align="center",
+                    width="100%",
                 ),
-                rx.select(
-                    ["contains", "equals", "<", ">"],
-                    value=RuleState.condition_operator,
-                    on_change=RuleState.set_condition_operator,
-                ),
-                rx.input(
-                    placeholder="Value",
-                    value=RuleState.condition_value,
-                    on_change=RuleState.set_condition_value,
+                # List of conditions
+                rx.cond(
+                    RuleState.conditions.length() == 0,
+                    rx.text("No conditions yet. Add one to get started!", color="gray", size="2"),
+                    rx.vstack(
+                        rx.foreach(
+                            RuleState.conditions,
+                            lambda cond, idx: condition_item(cond, idx),
+                        ),
+                        spacing="2",
+                        width="100%",
+                    ),
                 ),
                 spacing="2",
                 width="100%",
             ),
-            # Action
+            # Action section
             rx.divider(),
-            rx.heading("Action", size="3"),
-            rx.hstack(
-                rx.select(
-                    ["set_category"],
-                    value=RuleState.action_type,
-                    on_change=RuleState.set_action_type,
+            rx.vstack(
+                rx.hstack(
+                    rx.icon("zap", size=18),
+                    rx.text("Action", size="3", weight="bold"),
+                    spacing="2",
+                    align="center",
                 ),
-                rx.select(
-                    RuleState.categories,
-                    placeholder="Select Category",
-                    value=RuleState.action_value,
-                    on_change=RuleState.set_action_value,
+                rx.hstack(
+                    rx.select(
+                        ["set_category"],
+                        value=RuleState.action_type,
+                        on_change=RuleState.set_action_type,
+                        size="2",
+                    ),
+                    rx.select(
+                        RuleState.categories,
+                        placeholder="Select Category",
+                        value=RuleState.action_value,
+                        on_change=RuleState.set_action_value,
+                        size="2",
+                        flex="1",
+                    ),
+                    spacing="2",
+                    width="100%",
                 ),
                 spacing="2",
                 width="100%",
@@ -75,17 +179,33 @@ def rule_form() -> rx.Component:
             # Messages
             rx.cond(
                 RuleState.error != "",
-                rx.text(RuleState.error, color="red", size="2"),
+                rx.callout(
+                    RuleState.error,
+                    icon="triangle_alert",
+                    color_scheme="red",
+                    size="1",
+                ),
             ),
             rx.cond(
                 RuleState.success != "",
-                rx.text(RuleState.success, color="green", size="2"),
+                rx.callout(
+                    RuleState.success,
+                    icon="check",
+                    color_scheme="green",
+                    size="1",
+                ),
             ),
             # Submit
             rx.button(
-                "Create Rule",
+                rx.icon("plus", size=18),
+                rx.cond(
+                    RuleState.editing_id != None,
+                    "Update Rule",
+                    "Create Rule"
+                ),
                 on_click=RuleState.create_rule,
                 size="3",
+                width="100%",
             ),
             spacing="3",
             width="100%",
@@ -97,39 +217,68 @@ def rule_row(rule: dict) -> rx.Component:
     """Rule table row (functional component)."""
     return rx.table.row(
         rx.table.cell(rule["name"]),
-        rx.table.cell(rule["priority"]),
-        rx.table.cell(rule.get("condition_text", "-")),
+        rx.table.cell(rule.get("condition_text", "-"), max_width="300px"),
         rx.table.cell(rule.get("action_text", "-")),
         rx.table.cell(
-            rx.cond(
-                rule["is_active"],
-                rx.badge("Active", color_scheme="green"),
-                rx.badge("Inactive", color_scheme="gray"),
+            rx.badge(
+                str(rule.get("match_count", 0)),
+                color_scheme="blue",
+                variant="soft",
+            )
+        ),
+        rx.table.cell(
+            rx.tooltip(
+                rx.switch(
+                    checked=rule["is_active"],
+                    on_change=lambda _: RuleState.toggle_rule_active(
+                        rule["id"], rule["is_active"]
+                    ),
+                ),
+                content="Enable or disable this rule",
+            )
+        ),
+        rx.table.cell(
+            rx.tooltip(
+                rx.input(
+                    type="number",
+                    value=str(rule["priority"]),
+                    on_blur=lambda val: RuleState.update_rule_priority(rule["id"], val),
+                    width="60px",
+                    size="1",
+                ),
+                content="Higher priority rules are applied first",
             )
         ),
         rx.table.cell(
             rx.hstack(
-                rx.button(
-                    rx.icon("play", size=16),
-                    on_click=lambda: RuleState.toggle_rule_active(
-                        rule["id"], rule["is_active"]
+                rx.tooltip(
+                    rx.button(
+                        rx.icon("pencil", size=16),
+                        on_click=lambda: RuleState.edit_rule(rule["id"]),
+                        size="1",
+                        variant="soft",
                     ),
-                    size="1",
-                    variant="soft",
+                    content="Edit this rule",
                 ),
-                rx.button(
-                    rx.icon("test-tube", size=16),
-                    on_click=lambda: RuleState.test_rule(rule["id"]),
-                    size="1",
-                    variant="soft",
-                    color_scheme="blue",
+                rx.tooltip(
+                    rx.button(
+                        rx.icon("test-tube", size=16),
+                        on_click=lambda: RuleState.test_rule(rule["id"]),
+                        size="1",
+                        variant="soft",
+                        color_scheme="blue",
+                    ),
+                    content="Test rule against recent transactions",
                 ),
-                rx.button(
-                    rx.icon("trash-2", size=16),
-                    on_click=lambda: RuleState.delete_rule(rule["id"]),
-                    size="1",
-                    variant="soft",
-                    color_scheme="red",
+                rx.tooltip(
+                    rx.button(
+                        rx.icon("trash-2", size=16),
+                        on_click=lambda: RuleState.delete_rule(rule["id"]),
+                        size="1",
+                        variant="soft",
+                        color_scheme="red",
+                    ),
+                    content="Delete this rule",
                 ),
                 spacing="1",
             )
@@ -144,11 +293,14 @@ def rules_table() -> rx.Component:
             rx.hstack(
                 rx.heading("Rules", size="5"),
                 rx.spacer(),
-                rx.button(
-                    "Apply Rules to Uncategorized",
-                    on_click=RuleState.apply_rules,
-                    size="2",
-                    color_scheme="green",
+                rx.tooltip(
+                    rx.button(
+                        "Apply Rules to Uncategorized",
+                        on_click=RuleState.apply_rules,
+                        size="2",
+                        color_scheme="green",
+                    ),
+                    content="Apply all active rules to uncategorized transactions",
                 ),
                 width="100%",
                 align="center",
@@ -157,10 +309,11 @@ def rules_table() -> rx.Component:
                 rx.table.header(
                     rx.table.row(
                         rx.table.column_header_cell("Name"),
-                        rx.table.column_header_cell("Priority"),
-                        rx.table.column_header_cell("Condition"),
+                        rx.table.column_header_cell("Conditions"),
                         rx.table.column_header_cell("Action"),
-                        rx.table.column_header_cell("Status"),
+                        rx.table.column_header_cell("Matches"),
+                        rx.table.column_header_cell("Active"),
+                        rx.table.column_header_cell("Priority"),
                         rx.table.column_header_cell("Actions"),
                     ),
                 ),

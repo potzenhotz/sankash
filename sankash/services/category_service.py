@@ -158,6 +158,20 @@ def get_category_display_name(db_path: str, category_name: str | None) -> str:
     return category_name
 
 
+def get_parent_color(db_path: str, parent_name: str) -> str:
+    """
+    Get the color of a parent category by name.
+
+    Returns the parent's color or default color if not found.
+    """
+    parent_df = get_category_by_name(db_path, parent_name)
+    if len(parent_df) == 0:
+        return "#6366f1"  # Default color
+
+    parent = parent_df.to_dicts()[0]
+    return parent.get("color", "#6366f1")
+
+
 def seed_default_categories(db_path: str) -> None:
     """Seed database with default categories."""
     default_categories = [
