@@ -23,39 +23,48 @@ def get_transactions(
     Get transactions with optional filters (pure function).
 
     Returns Polars DataFrame for efficient data processing.
+    Includes import source information from import_history table.
     """
-    query = "SELECT * FROM transactions WHERE 1=1"
+    query = """
+    SELECT
+        t.*,
+        ih.filename as import_filename,
+        ih.import_date as import_date
+    FROM transactions t
+    LEFT JOIN import_history ih ON t.import_session_id = ih.id
+    WHERE 1=1
+    """
     params: dict = {}
 
     if account_id is not None:
-        query += " AND account_id = $account_id"
+        query += " AND t.account_id = $account_id"
         params["account_id"] = account_id
 
     if start_date:
-        query += " AND date >= $start_date"
+        query += " AND t.date >= $start_date"
         params["start_date"] = start_date
 
     if end_date:
-        query += " AND date <= $end_date"
+        query += " AND t.date <= $end_date"
         params["end_date"] = end_date
 
     if category:
-        query += " AND category = $category"
+        query += " AND t.category = $category"
         params["category"] = category
 
     if min_amount is not None:
-        query += " AND amount >= $min_amount"
+        query += " AND t.amount >= $min_amount"
         params["min_amount"] = min_amount
 
     if max_amount is not None:
-        query += " AND amount <= $max_amount"
+        query += " AND t.amount <= $max_amount"
         params["max_amount"] = max_amount
 
     if is_categorized is not None:
-        query += " AND is_categorized = $is_categorized"
+        query += " AND t.is_categorized = $is_categorized"
         params["is_categorized"] = is_categorized
 
-    query += " ORDER BY date DESC, id DESC"
+    query += " ORDER BY t.date DESC, t.id DESC"
 
     return execute_query(db_path, query, params if params else None)
 
@@ -108,8 +117,8 @@ def create_transaction(db_path: str, transaction: Transaction) -> int:
     result = execute_query(
         db_path,
         """INSERT INTO transactions
-        (account_id, date, payee, notes, amount, category, is_categorized, is_transfer, transfer_account_id, imported_id)
-        VALUES ($account_id, $date, $payee, $notes, $amount, $category, $is_categorized, $is_transfer, $transfer_account_id, $imported_id)
+        (account_id, date, payee, notes, amount, category, is_categorized, is_transfer, transfer_account_id, imported_id, import_session_id)
+        VALUES ($account_id, $date, $payee, $notes, $amount, $category, $is_categorized, $is_transfer, $transfer_account_id, $imported_id, $import_session_id)
         RETURNING id""",
         {
             "account_id": transaction.account_id,
@@ -122,6 +131,7 @@ def create_transaction(db_path: str, transaction: Transaction) -> int:
             "is_transfer": transaction.is_transfer,
             "transfer_account_id": transaction.transfer_account_id,
             "imported_id": transaction.imported_id,
+            "import_session_id": transaction.import_session_id,
         }
     )
     return int(result["id"][0])

@@ -5,6 +5,7 @@ CREATE SEQUENCE IF NOT EXISTS seq_accounts_id START 1;
 CREATE SEQUENCE IF NOT EXISTS seq_categories_id START 1;
 CREATE SEQUENCE IF NOT EXISTS seq_transactions_id START 1;
 CREATE SEQUENCE IF NOT EXISTS seq_rules_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_import_history_id START 1;
 
 -- Accounts table
 CREATE TABLE IF NOT EXISTS accounts (
@@ -26,6 +27,21 @@ CREATE TABLE IF NOT EXISTS categories (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Import History table
+CREATE TABLE IF NOT EXISTS import_history (
+    id INTEGER PRIMARY KEY DEFAULT nextval('seq_import_history_id'),
+    filename VARCHAR NOT NULL,
+    account_id INTEGER NOT NULL,
+    bank_format VARCHAR NOT NULL,
+    import_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total_count INTEGER NOT NULL,
+    imported_count INTEGER NOT NULL,
+    duplicate_count INTEGER NOT NULL,
+    categorized_count INTEGER NOT NULL,
+    file_hash VARCHAR,
+    FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
 -- Transactions table
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY DEFAULT nextval('seq_transactions_id'),
@@ -39,9 +55,11 @@ CREATE TABLE IF NOT EXISTS transactions (
     is_transfer BOOLEAN NOT NULL DEFAULT FALSE,
     transfer_account_id INTEGER,
     imported_id VARCHAR,
+    import_session_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES accounts(id),
-    FOREIGN KEY (transfer_account_id) REFERENCES accounts(id)
+    FOREIGN KEY (transfer_account_id) REFERENCES accounts(id),
+    FOREIGN KEY (import_session_id) REFERENCES import_history(id)
 );
 
 -- Rules table
@@ -62,4 +80,6 @@ CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_i
 CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
 CREATE INDEX IF NOT EXISTS idx_transactions_is_categorized ON transactions(is_categorized);
 CREATE INDEX IF NOT EXISTS idx_transactions_imported_id ON transactions(imported_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_import_session ON transactions(import_session_id);
+CREATE INDEX IF NOT EXISTS idx_import_history_account_id ON import_history(account_id);
 CREATE INDEX IF NOT EXISTS idx_rules_priority ON rules(priority);

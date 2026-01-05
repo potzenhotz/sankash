@@ -214,7 +214,95 @@ def import_results() -> rx.Component:
     )
 
 
-@rx.page(route="/import", on_load=ImportState.load_accounts)
+def history_row(import_record: dict) -> rx.Component:
+    """Import history row (functional component)."""
+    return rx.table.row(
+        rx.table.cell(
+            rx.text(
+                import_record.get("import_date", "-"),
+                size="2",
+            ),
+        ),
+        rx.table.cell(
+            rx.text(
+                import_record.get("filename", ""),
+                size="2",
+                weight="medium",
+            ),
+        ),
+        rx.table.cell(
+            f"{import_record.get('account_name', '')} ({import_record.get('account_bank', '')})",
+        ),
+        rx.table.cell(
+            rx.badge(
+                import_record.get("bank_format", ""),
+                color_scheme="blue",
+                size="1",
+            ),
+        ),
+        rx.table.cell(
+            rx.text(
+                str(import_record.get("total_count", 0)),
+                size="2",
+            ),
+        ),
+        rx.table.cell(
+            rx.text(
+                str(import_record.get("imported_count", 0)),
+                size="2",
+                color="green",
+                weight="medium",
+            ),
+        ),
+        rx.table.cell(
+            rx.text(
+                str(import_record.get("duplicate_count", 0)),
+                size="2",
+                color="orange",
+            ),
+        ),
+        rx.table.cell(
+            rx.text(
+                str(import_record.get("categorized_count", 0)),
+                size="2",
+                color="blue",
+            ),
+        ),
+    )
+
+
+def import_history_section() -> rx.Component:
+    """Import history display (functional component)."""
+    return rx.card(
+        rx.vstack(
+            rx.heading("Import History", size="5"),
+            rx.text(
+                "Recent CSV imports",
+                size="2",
+                color="gray",
+            ),
+            rx.table.root(
+                rx.table.header(
+                    rx.table.row(
+                        rx.table.column_header_cell("Date"),
+                        rx.table.column_header_cell("File"),
+                        rx.table.column_header_cell("Account"),
+                        rx.table.column_header_cell("Format"),
+                        rx.table.column_header_cell("Total"),
+                        rx.table.column_header_cell("Imported"),
+                        rx.table.column_header_cell("Duplicates"),
+                        rx.table.column_header_cell("Categorized"),
+                    ),
+                ),
+                rx.table.body(rx.foreach(ImportState.import_history, history_row)),
+            ),
+            spacing="3",
+            width="100%",
+        ),
+    )
+
+
+@rx.page(route="/import", on_load=[ImportState.load_accounts, ImportState.load_import_history])
 def import_page() -> rx.Component:
     """CSV import page."""
     return layout(
@@ -230,6 +318,10 @@ def import_page() -> rx.Component:
             rx.cond(
                 ImportState.show_results,
                 import_results(),
+            ),
+            rx.cond(
+                ImportState.show_history,
+                import_history_section(),
             ),
             spacing="4",
             width="100%",

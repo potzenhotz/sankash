@@ -1,6 +1,7 @@
 """Import service for CSV processing using functional approach."""
 
 import hashlib
+import os
 from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
@@ -8,8 +9,13 @@ from typing import Callable, Optional
 import polars as pl
 
 from sankash.converters.bank_converters import BankFormat, get_converter
-from sankash.core.models import Transaction
+from sankash.core.models import ImportHistory, Transaction
 from sankash.services.transaction_service import create_transaction, get_transactions
+from sankash.services.import_history_service import (
+    calculate_file_hash,
+    check_duplicate_file,
+    create_import_history,
+)
 from sankash.utils.duplicate_detection import find_duplicates
 
 
@@ -155,8 +161,12 @@ def import_transactions(
         bank_format: Bank format for conversion (default: STANDARD)
 
     Returns:
-        Dictionary with import statistics
+        Dictionary with import statistics including import_session_id
     """
+    # Calculate file hash for duplicate detection
+    file_hash = calculate_file_hash(file_path)
+    filename = os.path.basename(file_path)
+
     # Get converter for bank format
     converter = get_converter(bank_format)
 
@@ -175,7 +185,21 @@ def import_transactions(
     # Filter duplicates
     new_transactions, duplicates = filter_duplicate_transactions(import_df, existing_df)
 
-    # Import new transactions
+    # Create import history record
+    import_history = ImportHistory(
+        filename=filename,
+        account_id=account_id,
+        bank_format=bank_format.value,
+        total_count=len(import_df),
+        imported_count=len(new_transactions),
+        duplicate_count=len(duplicates),
+        categorized_count=0,  # Will be updated after applying rules
+        file_hash=file_hash,
+    )
+
+    import_session_id = create_import_history(db_path, import_history)
+
+    # Import new transactions with import_session_id
     imported_count = 0
     for row in new_transactions.to_dicts():
         transaction = Transaction(
@@ -185,6 +209,7 @@ def import_transactions(
             notes=row.get("notes"),
             amount=row["amount"],
             imported_id=row["imported_id"],
+            import_session_id=import_session_id,
         )
         create_transaction(db_path, transaction)
         imported_count += 1
@@ -193,11 +218,23 @@ def import_transactions(
     from sankash.services.rule_service import apply_rules_to_uncategorized
     categorized_count = apply_rules_to_uncategorized(db_path)
 
+    # Update import history with categorized count
+    import duckdb
+    con = duckdb.connect(db_path)
+    con.execute(
+        "UPDATE import_history SET categorized_count = ? WHERE id = ?",
+        [categorized_count, import_session_id],
+    )
+    con.close()
+
     return {
         "total": len(import_df),
         "imported": imported_count,
         "duplicates": len(duplicates),
         "categorized": categorized_count,
+        "import_session_id": import_session_id,
+        "filename": filename,
+        "file_hash": file_hash,
     }
 
 

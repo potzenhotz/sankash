@@ -4,6 +4,7 @@ import reflex as rx
 
 from sankash.converters.bank_converters import BankFormat
 from sankash.services import import_service, account_service
+from sankash.services.import_history_service import get_import_history
 from sankash.state.base import BaseState
 
 
@@ -29,6 +30,10 @@ class ImportState(BaseState):
     # Import results
     import_stats: dict[str, int] = {}
     show_results: bool = False
+
+    # Import history
+    import_history: list[dict] = []
+    show_history: bool = False
 
     @rx.var
     def account_options(self) -> list[str]:
@@ -75,6 +80,17 @@ class ImportState(BaseState):
             self.accounts = df.to_dicts()
         except Exception as e:
             self.error = f"Failed to load accounts: {str(e)}"
+
+    def load_import_history(self) -> None:
+        """Load import history."""
+        try:
+            df = get_import_history(self.db_path, limit=20)
+            self.import_history = df.to_dicts()
+            self.show_history = len(self.import_history) > 0
+        except Exception as e:
+            # Gracefully handle if table doesn't exist yet
+            self.import_history = []
+            self.show_history = False
 
     async def handle_upload(self, files: list[rx.UploadFile]) -> None:
         """Handle file upload."""
@@ -139,6 +155,9 @@ class ImportState(BaseState):
             self.import_stats = stats
             self.show_results = True
             self.success = f"Import completed! {stats['imported']} transactions imported."
+
+            # Reload import history to show the new import
+            self.load_import_history()
 
             # Cleanup
             import os

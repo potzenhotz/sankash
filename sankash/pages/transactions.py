@@ -181,6 +181,17 @@ def transaction_row(transaction: dict) -> rx.Component:
                 rx.text("-", color="gray"),
             )
         ),
+        rx.table.cell(
+            rx.cond(
+                transaction.get("import_filename") is not None,
+                rx.badge(
+                    transaction.get("import_filename", ""),
+                    color_scheme="gray",
+                    size="1",
+                ),
+                rx.text("-", color="gray", size="1"),
+            )
+        ),
     )
 
 
@@ -251,6 +262,7 @@ def transactions_table() -> rx.Component:
                         ),
                         rx.table.column_header_cell("Category"),
                         rx.table.column_header_cell("Transfer"),
+                        rx.table.column_header_cell("Import Source"),
                     ),
                 ),
                 rx.table.body(

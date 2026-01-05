@@ -1,6 +1,6 @@
 """Data models using Pydantic for type safety."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -26,6 +26,21 @@ class Category(BaseModel):
     color: str = "#6366f1"
 
 
+class ImportHistory(BaseModel):
+    """Import history model."""
+
+    id: Optional[int] = None
+    filename: str
+    account_id: int
+    bank_format: str
+    import_date: Optional[datetime] = None
+    total_count: int
+    imported_count: int
+    duplicate_count: int
+    categorized_count: int
+    file_hash: Optional[str] = None
+
+
 class Transaction(BaseModel):
     """Transaction model."""
 
@@ -40,6 +55,7 @@ class Transaction(BaseModel):
     is_transfer: bool = False
     transfer_account_id: Optional[int] = None
     imported_id: Optional[str] = None
+    import_session_id: Optional[int] = None
 
 
 class RuleCondition(BaseModel):
