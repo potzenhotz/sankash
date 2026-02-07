@@ -1,7 +1,9 @@
 """Reflex configuration."""
 
 import reflex as rx
-# test
+from dotenv import load_dotenv
+
+load_dotenv()
 
 config = rx.Config(
     app_name="sankash",

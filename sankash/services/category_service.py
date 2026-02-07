@@ -52,7 +52,15 @@ def create_category(db_path: str, category: Category) -> int:
 
 
 def update_category(db_path: str, category_id: int, category: Category) -> None:
-    """Update existing category."""
+    """Update existing category, cascading name changes to children and transactions."""
+    # Get the old name before updating
+    old_df = execute_query(
+        db_path,
+        "SELECT name FROM categories WHERE id = $id",
+        {"id": category_id},
+    )
+    old_name = old_df["name"][0] if not old_df.is_empty() else None
+
     execute_command(
         db_path,
         """UPDATE categories
@@ -67,6 +75,19 @@ def update_category(db_path: str, category_id: int, category: Category) -> None:
             "color": category.color,
         }
     )
+
+    # Cascade name change to subcategories and transactions
+    if old_name and old_name != category.name:
+        execute_command(
+            db_path,
+            "UPDATE categories SET parent_category = $new WHERE parent_category = $old",
+            {"new": category.name, "old": old_name},
+        )
+        execute_command(
+            db_path,
+            "UPDATE transactions SET category = $new WHERE category = $old",
+            {"new": category.name, "old": old_name},
+        )
 
 
 def delete_category(db_path: str, category_id: int) -> None:
@@ -87,6 +108,15 @@ def delete_category(db_path: str, category_id: int) -> None:
         "DELETE FROM categories WHERE id = $id",
         {"id": category_id}
     )
+
+
+def delete_all_categories(db_path: str) -> None:
+    """Delete all categories and uncategorize all transactions."""
+    execute_command(
+        db_path,
+        "UPDATE transactions SET category = NULL, is_categorized = FALSE WHERE is_categorized = TRUE",
+    )
+    execute_command(db_path, "DELETE FROM categories")
 
 
 def get_parent_categories(db_path: str) -> pl.DataFrame:
@@ -195,3 +225,28 @@ def seed_default_categories(db_path: str) -> None:
         except Exception:
             # Category might already exist, skip
             pass
+
+
+def seed_default_categories_german(db_path: str) -> tuple[int, int]:
+    """
+    Seed database with German default categories, skipping duplicates.
+
+    Returns (added_count, skipped_count).
+    """
+    from sankash.core.default_categories import DEFAULT_CATEGORIES_DE
+
+    existing_df = get_categories(db_path)
+    existing_names = set(existing_df["name"].to_list()) if not existing_df.is_empty() else set()
+
+    added = 0
+    skipped = 0
+
+    for category in DEFAULT_CATEGORIES_DE:
+        if category.name in existing_names:
+            skipped += 1
+            continue
+        create_category(db_path, category)
+        existing_names.add(category.name)
+        added += 1
+
+    return added, skipped

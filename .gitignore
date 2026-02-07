@@ -49,6 +49,9 @@ config/settings.yaml
 .DS_Store
 Thumbs.db
 
+# Environment
+.env
+
 # Testing
 .pytest_cache/
 .coverage

@@ -92,7 +92,8 @@ def get_import_history(
         SELECT
             ih.*,
             a.name as account_name,
-            a.bank as account_bank
+            a.bank as account_bank,
+            (SELECT COUNT(*) FROM transactions t WHERE t.import_session_id = ih.id) as remaining_count
         FROM import_history ih
         JOIN accounts a ON ih.account_id = a.id
         WHERE ih.account_id = ?
@@ -105,7 +106,8 @@ def get_import_history(
         SELECT
             ih.*,
             a.name as account_name,
-            a.bank as account_bank
+            a.bank as account_bank,
+            (SELECT COUNT(*) FROM transactions t WHERE t.import_session_id = ih.id) as remaining_count
         FROM import_history ih
         JOIN accounts a ON ih.account_id = a.id
         ORDER BY ih.import_date DESC

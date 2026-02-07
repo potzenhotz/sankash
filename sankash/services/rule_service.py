@@ -123,8 +123,8 @@ def apply_rules_to_uncategorized(db_path: str) -> int:
 
     rules = [parse_rule_from_row(row) for row in rules_df.to_dicts()]
 
-    # Get uncategorized transactions
-    transactions_df = get_transactions(db_path, is_categorized=False)
+    # Get all uncategorized transactions (no pagination limit)
+    transactions_df, _ = get_transactions(db_path, is_categorized=False, limit=100_000, offset=0)
 
     if transactions_df.is_empty():
         return 0
@@ -152,8 +152,8 @@ def test_rule(db_path: str, rule: Rule, limit: int = 100) -> pl.DataFrame:
     """
     from sankash.services.transaction_service import get_transactions
 
-    # Get recent transactions
-    transactions_df = get_transactions(db_path)
+    # Get all transactions (no pagination limit)
+    transactions_df, _ = get_transactions(db_path, limit=100_000, offset=0)
 
     if transactions_df.is_empty():
         return pl.DataFrame()
@@ -231,8 +231,8 @@ def count_matching_transactions(db_path: str, rule: Rule) -> int:
     """
     from sankash.services.transaction_service import get_transactions
 
-    # Get all transactions
-    transactions_df = get_transactions(db_path)
+    # Get all transactions (no pagination limit)
+    transactions_df, _ = get_transactions(db_path, limit=100_000, offset=0)
 
     if transactions_df.is_empty():
         return 0

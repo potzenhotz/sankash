@@ -18,55 +18,82 @@ def get_transactions(
     min_amount: Optional[float] = None,
     max_amount: Optional[float] = None,
     is_categorized: Optional[bool] = None,
-) -> pl.DataFrame:
+    search_query: Optional[str] = None,
+    sort_by: str = "date",
+    sort_order: str = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[pl.DataFrame, int]:
     """
-    Get transactions with optional filters (pure function).
+    Get transactions with optional filters, search, sort, and pagination.
 
-    Returns Polars DataFrame for efficient data processing.
+    Returns tuple of (Polars DataFrame, total_count) for paginated results.
     Includes import source information from import_history table.
     """
-    query = """
-    SELECT
-        t.*,
-        ih.filename as import_filename,
-        ih.import_date as import_date
-    FROM transactions t
-    LEFT JOIN import_history ih ON t.import_session_id = ih.id
-    WHERE 1=1
-    """
+    where_clause = " WHERE 1=1"
     params: dict = {}
 
     if account_id is not None:
-        query += " AND t.account_id = $account_id"
+        where_clause += " AND t.account_id = $account_id"
         params["account_id"] = account_id
 
     if start_date:
-        query += " AND t.date >= $start_date"
+        where_clause += " AND t.date >= $start_date"
         params["start_date"] = start_date
 
     if end_date:
-        query += " AND t.date <= $end_date"
+        where_clause += " AND t.date <= $end_date"
         params["end_date"] = end_date
 
     if category:
-        query += " AND t.category = $category"
+        where_clause += " AND t.category = $category"
         params["category"] = category
 
     if min_amount is not None:
-        query += " AND t.amount >= $min_amount"
+        where_clause += " AND t.amount >= $min_amount"
         params["min_amount"] = min_amount
 
     if max_amount is not None:
-        query += " AND t.amount <= $max_amount"
+        where_clause += " AND t.amount <= $max_amount"
         params["max_amount"] = max_amount
 
     if is_categorized is not None:
-        query += " AND t.is_categorized = $is_categorized"
+        where_clause += " AND t.is_categorized = $is_categorized"
         params["is_categorized"] = is_categorized
 
-    query += " ORDER BY t.date DESC, t.id DESC"
+    if search_query:
+        where_clause += (
+            " AND (t.payee ILIKE $search OR t.notes ILIKE $search"
+            " OR t.category ILIKE $search)"
+        )
+        params["search"] = f"%{search_query}%"
 
-    return execute_query(db_path, query, params if params else None)
+    # Build ORDER BY
+    sort_col = "t.amount" if sort_by == "amount" else "t.date"
+    sort_dir = "ASC" if sort_order == "asc" else "DESC"
+    order_clause = f" ORDER BY {sort_col} {sort_dir}, t.id DESC"
+
+    # Count query (same filters, no pagination)
+    count_query = (
+        "SELECT COUNT(*) as count FROM transactions t"
+        f" LEFT JOIN import_history ih ON t.import_session_id = ih.id"
+        f"{where_clause}"
+    )
+    count_df = execute_query(db_path, count_query, params if params else None)
+    total_count = int(count_df["count"][0])
+
+    # Data query with pagination
+    data_query = (
+        "SELECT t.*, ih.filename as import_filename,"
+        " ih.import_date as import_date"
+        " FROM transactions t"
+        " LEFT JOIN import_history ih ON t.import_session_id = ih.id"
+        f"{where_clause}{order_clause}"
+        f" LIMIT {limit} OFFSET {offset}"
+    )
+    df = execute_query(db_path, data_query, params if params else None)
+
+    return df, total_count
 
 
 def get_uncategorized_count(db_path: str) -> int:
@@ -178,3 +205,9 @@ def delete_transaction(db_path: str, transaction_id: int) -> None:
         "DELETE FROM transactions WHERE id = $id",
         {"id": transaction_id}
     )
+
+
+def delete_all_transactions(db_path: str) -> None:
+    """Delete all transactions and their import history."""
+    execute_command(db_path, "DELETE FROM transactions")
+    execute_command(db_path, "DELETE FROM import_history")

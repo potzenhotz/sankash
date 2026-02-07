@@ -21,6 +21,7 @@ class ImportState(BaseState):
     # Form fields
     selected_account_id: int = 0
     uploaded_file: str = ""
+    original_filename: str = ""
     bank_format: str = BankFormat.STANDARD.value
 
     # Preview
@@ -73,6 +74,17 @@ class ImportState(BaseState):
         }
         self.bank_format = format_map.get(value, BankFormat.STANDARD.value)
 
+    def reset_ui(self) -> None:
+        """Reset transient UI state on page load."""
+        self.show_preview = False
+        self.show_results = False
+        self.preview_data = []
+        self.import_stats = {}
+        self.uploaded_file = ""
+        self.original_filename = ""
+        self.error = ""
+        self.success = ""
+
     def load_accounts(self) -> None:
         """Load available accounts."""
         try:
@@ -108,6 +120,7 @@ class ImportState(BaseState):
             tmp.write(upload_data)
             self.uploaded_file = tmp.name
 
+        self.original_filename = file.filename or ""
         self.success = f"File '{file.filename}' uploaded successfully"
         self.show_preview = False
         self.show_results = False
@@ -150,6 +163,7 @@ class ImportState(BaseState):
                 self.uploaded_file,
                 self.selected_account_id,
                 bank_format=BankFormat(self.bank_format),
+                original_filename=self.original_filename,
             )
 
             self.import_stats = stats

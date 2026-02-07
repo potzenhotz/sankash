@@ -70,13 +70,16 @@ def parse_csv_to_dataframe(
     return df
 
 
-def create_imported_id(transaction_date: date, amount: float, payee: str, notes: str = "") -> str:
+def create_imported_id(
+    transaction_date: date, amount: float, payee: str, notes: str = "", occurrence: int = 0
+) -> str:
     """
     Create unique imported_id from transaction data (pure function).
 
-    Format: date_amount_payee_hash
+    Includes occurrence index to distinguish identical transactions within a file
+    while still matching across overlapping CSV exports.
     """
-    data = f"{transaction_date}_{amount}_{payee}_{notes}"
+    data = f"{transaction_date}_{amount}_{payee}_{notes}_{occurrence}"
     hash_suffix = hashlib.md5(data.encode()).hexdigest()[:8]
 
     return f"{transaction_date}_{amount}_{hash_suffix}"
@@ -86,27 +89,32 @@ def add_imported_ids(df: pl.DataFrame) -> pl.DataFrame:
     """
     Add imported_id column to DataFrame (pure function).
 
-    Uses Polars map_rows for efficient row-wise operations.
+    Uses an occurrence counter within groups of identical (date, amount, payee, notes)
+    so that:
+    - Identical rows within the same file get unique IDs (occurrence 0, 1, 2...)
+    - The same rows in a different overlapping CSV get the same IDs (same occurrences)
     """
-    def create_id_row(row: tuple) -> str:
-        """Create imported_id from row tuple."""
-        date_val, amount_val, payee_val, notes_val = row
-        return create_imported_id(date_val, amount_val, payee_val, notes_val or "")
-
-    # Create imported_id using map_rows
+    # Add occurrence counter within each group of identical transactions
     df = df.with_columns(
-        pl.struct(["date", "amount", "payee", "notes"])
+        pl.cum_count("date").over("date", "amount", "payee", "notes").alias("_occurrence") - 1
+    )
+
+    df = df.with_columns(
+        pl.struct(["date", "amount", "payee", "notes", "_occurrence"])
         .map_elements(
             lambda row: create_imported_id(
                 row["date"],
                 row["amount"],
                 row["payee"],
-                row["notes"] or ""
+                row["notes"] or "",
+                row["_occurrence"],
             ),
-            return_dtype=pl.Utf8
+            return_dtype=pl.Utf8,
         )
         .alias("imported_id")
     )
+
+    df = df.drop("_occurrence")
 
     return df
 
@@ -150,6 +158,7 @@ def import_transactions(
     file_path: str | Path,
     account_id: int,
     bank_format: BankFormat = BankFormat.STANDARD,
+    original_filename: str = "",
 ) -> dict[str, int]:
     """
     Import transactions from CSV file.
@@ -159,13 +168,14 @@ def import_transactions(
         file_path: Path to CSV file
         account_id: Account to import into
         bank_format: Bank format for conversion (default: STANDARD)
+        original_filename: Original filename before temp storage
 
     Returns:
         Dictionary with import statistics including import_session_id
     """
     # Calculate file hash for duplicate detection
     file_hash = calculate_file_hash(file_path)
-    filename = os.path.basename(file_path)
+    filename = original_filename or os.path.basename(file_path)
 
     # Get converter for bank format
     converter = get_converter(bank_format)
@@ -180,7 +190,7 @@ def import_transactions(
     import_df = transform_import_dataframe(import_df, account_id)
 
     # Get existing transactions for duplicate detection
-    existing_df = get_transactions(db_path, account_id=account_id)
+    existing_df, _ = get_transactions(db_path, account_id=account_id, limit=100_000, offset=0)
 
     # Filter duplicates
     new_transactions, duplicates = filter_duplicate_transactions(import_df, existing_df)
@@ -199,27 +209,33 @@ def import_transactions(
 
     import_session_id = create_import_history(db_path, import_history)
 
-    # Import new transactions with import_session_id
-    imported_count = 0
-    for row in new_transactions.to_dicts():
-        transaction = Transaction(
-            account_id=row["account_id"],
-            date=row["date"],
-            payee=row["payee"],
-            notes=row.get("notes"),
-            amount=row["amount"],
-            imported_id=row["imported_id"],
-            import_session_id=import_session_id,
-        )
-        create_transaction(db_path, transaction)
-        imported_count += 1
+    # Bulk insert all new transactions using a single connection
+    import duckdb
+
+    insert_df = new_transactions.select([
+        pl.col("account_id"),
+        pl.col("date"),
+        pl.col("payee"),
+        pl.col("notes").fill_null(""),
+        pl.col("amount"),
+        pl.col("imported_id"),
+        pl.lit(import_session_id).alias("import_session_id"),
+    ])
+
+    con = duckdb.connect(db_path)
+    con.execute(
+        """INSERT INTO transactions
+        (account_id, date, payee, notes, amount, imported_id, import_session_id)
+        SELECT * FROM insert_df""",
+    )
+    imported_count = len(insert_df)
+    con.close()
 
     # Apply rules to newly imported transactions
     from sankash.services.rule_service import apply_rules_to_uncategorized
     categorized_count = apply_rules_to_uncategorized(db_path)
 
     # Update import history with categorized count
-    import duckdb
     con = duckdb.connect(db_path)
     con.execute(
         "UPDATE import_history SET categorized_count = ? WHERE id = ?",

@@ -74,6 +74,12 @@ CREATE TABLE IF NOT EXISTS rules (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Settings table (key-value store for user-facing configuration)
+CREATE TABLE IF NOT EXISTS settings (
+    key VARCHAR PRIMARY KEY,
+    value VARCHAR NOT NULL
+);
+
 -- Indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
 CREATE INDEX IF NOT EXISTS idx_transactions_account_id ON transactions(account_id);

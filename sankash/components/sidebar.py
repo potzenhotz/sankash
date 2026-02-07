@@ -44,6 +44,7 @@ def sidebar() -> rx.Component:
                 nav_link("Categories", "/categories", "tags"),
                 nav_link("Rules", "/rules", "list-checks"),
                 nav_link("Import", "/import", "upload"),
+                nav_link("Settings", "/settings", "settings"),
                 spacing="1",
                 align="start",
                 width="100%",

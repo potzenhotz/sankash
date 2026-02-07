@@ -32,6 +32,10 @@ class CategoryState(BaseState):
     # Delete confirmation
     confirm_delete_id: int | None = None
 
+    # Delete all confirmation
+    show_delete_all_dialog: bool = False
+    delete_all_confirm_text: str = ""
+
     @rx.var
     def parent_category_options(self) -> list[str]:
         """Get list of parent categories for dropdown."""
@@ -244,3 +248,60 @@ class CategoryState(BaseState):
         """Set form color from palette."""
         logger.info(f"Color selected from palette: {color}")
         self.form_color = color
+
+    def open_delete_all_dialog(self) -> None:
+        """Open the delete-all confirmation dialog."""
+        self.show_delete_all_dialog = True
+        self.delete_all_confirm_text = ""
+        self.error = ""
+        self.success = ""
+
+    def close_delete_all_dialog(self) -> None:
+        """Close the delete-all confirmation dialog."""
+        self.show_delete_all_dialog = False
+        self.delete_all_confirm_text = ""
+
+    def handle_delete_all_dialog_open_change(self, is_open: bool) -> None:
+        """Handle dialog open state change."""
+        if not is_open:
+            self.close_delete_all_dialog()
+
+    def delete_all_categories(self) -> None:
+        """Delete all categories after confirmation."""
+        if self.delete_all_confirm_text.strip().lower() != "delete":
+            self.error = "Please type 'delete' to confirm"
+            return
+
+        self.loading = True
+        self.error = ""
+        self.success = ""
+
+        try:
+            category_service.delete_all_categories(self.db_path)
+            self.close_delete_all_dialog()
+            self.load_categories()
+            self.success = "All categories deleted"
+        except Exception as e:
+            self.error = f"Failed to delete categories: {str(e)}"
+            log_error("delete_all_categories", e)
+        finally:
+            self.loading = False
+
+    def seed_default_german(self) -> None:
+        """Add German default categories, skipping existing ones."""
+        self.loading = True
+        self.error = ""
+        self.success = ""
+
+        try:
+            added, skipped = category_service.seed_default_categories_german(self.db_path)
+            self.load_categories()
+            if added == 0:
+                self.success = f"All default categories already exist ({skipped} skipped)"
+            else:
+                self.success = f"{added} categories added, {skipped} skipped"
+        except Exception as e:
+            self.error = f"Failed to add categories: {str(e)}"
+            log_error("seed_default_german", e)
+        finally:
+            self.loading = False

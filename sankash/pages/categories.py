@@ -534,12 +534,89 @@ def delete_confirmation_dialog() -> rx.Component:
     )
 
 
+def delete_all_dialog() -> rx.Component:
+    """Dialog to confirm deleting all categories."""
+    return rx.dialog.root(
+        rx.dialog.content(
+            rx.dialog.title("Delete All Categories"),
+            rx.dialog.description(
+                "This will delete all categories and uncategorize all transactions. "
+                "This action cannot be undone.",
+                color="red",
+            ),
+            rx.vstack(
+                rx.text("Type 'delete' to confirm:", size="2", weight="bold"),
+                rx.input(
+                    placeholder="delete",
+                    value=CategoryState.delete_all_confirm_text,
+                    on_change=CategoryState.set_delete_all_confirm_text,
+                    width="100%",
+                ),
+                rx.cond(
+                    CategoryState.error != "",
+                    rx.callout(
+                        CategoryState.error,
+                        icon="triangle_alert",
+                        color_scheme="red",
+                        size="1",
+                    ),
+                ),
+                rx.hstack(
+                    rx.dialog.close(
+                        rx.button(
+                            "Cancel",
+                            variant="soft",
+                            color_scheme="gray",
+                        ),
+                    ),
+                    rx.button(
+                        rx.icon("trash-2", size=16),
+                        "Delete All",
+                        on_click=CategoryState.delete_all_categories,
+                        color_scheme="red",
+                        loading=CategoryState.loading,
+                    ),
+                    spacing="3",
+                    justify="end",
+                    width="100%",
+                ),
+                spacing="4",
+                width="100%",
+                padding_top="16px",
+            ),
+        ),
+        open=CategoryState.show_delete_all_dialog,
+        on_open_change=CategoryState.handle_delete_all_dialog_open_change,
+    )
+
+
 @rx.page(route="/categories", on_load=CategoryState.load_categories)
 def categories_page() -> rx.Component:
     """Categories management page."""
     return layout(
         rx.vstack(
-            rx.heading("Categories", size="8"),
+            rx.hstack(
+                rx.heading("Categories", size="8"),
+                rx.spacer(),
+                rx.button(
+                    rx.icon("list-plus", size=18),
+                    "German Defaults",
+                    on_click=CategoryState.seed_default_german,
+                    size="2",
+                    variant="soft",
+                    loading=CategoryState.loading,
+                ),
+                rx.button(
+                    rx.icon("trash-2", size=18),
+                    "Delete All",
+                    on_click=CategoryState.open_delete_all_dialog,
+                    size="2",
+                    variant="soft",
+                    color_scheme="red",
+                ),
+                width="100%",
+                align="center",
+            ),
             rx.text(
                 "Manage your transaction categories and subcategories",
                 color="gray",
@@ -578,6 +655,7 @@ def categories_page() -> rx.Component:
                 width="100%",
             ),
             delete_confirmation_dialog(),
+            delete_all_dialog(),
             spacing="4",
             width="100%",
         ),

@@ -1,8 +1,9 @@
+from enum import Enum
+from pathlib import Path
+
 import polars as pl
 import typer
-from pathlib import Path
 from typing_extensions import Annotated
-from enum import Enum
 
 app = typer.Typer(
     help="Convert bank CSV exports to Actual Budget format",
@@ -47,14 +48,10 @@ def convert_deutsche_bank_to_actual(input_file: Path, output_file: Path):
 
     # Filter out summary rows (like "Kontostand") - keep only rows with valid date format
     # Valid dates match DD.MM.YYYY pattern
-    df_actual = df_actual.filter(
-        pl.col("Date").str.contains(r"^\d{1,2}\.\d{1,2}\.\d{4}$")
-    )
+    df_actual = df_actual.filter(pl.col("Date").str.contains(r"^\d{1,2}\.\d{1,2}\.\d{4}$"))
 
     # Remove empty rows (if any)
-    df_actual = df_actual.filter(
-        pl.col("Date").is_not_null() & pl.col("Amount").is_not_null()
-    )
+    df_actual = df_actual.filter(pl.col("Date").is_not_null() & pl.col("Amount").is_not_null())
 
     # Convert date to ISO format (DD.MM.YYYY -> YYYY-MM-DD)
     df_actual = df_actual.with_columns(
@@ -84,9 +81,7 @@ def convert_deutsche_bank_to_actual(input_file: Path, output_file: Path):
     # Export as CSV (with dot as decimal separator for Actual Budget)
     df_actual.write_csv(output_file, separator=",", float_precision=2)
 
-    typer.echo(
-        typer.style("✅ Conversion successful!", fg=typer.colors.GREEN, bold=True)
-    )
+    typer.echo(typer.style("✅ Conversion successful!", fg=typer.colors.GREEN, bold=True))
     typer.echo(f"📊 {len(df_actual)} transactions converted")
     typer.echo(f"💾 Saved to: {output_file}")
     typer.echo(f"\n📋 First 5 rows:")
@@ -99,15 +94,9 @@ def convert_deutsche_bank_to_actual(input_file: Path, output_file: Path):
     income = df_actual.filter(pl.col("Amount") > 0)["Amount"].sum()
     expenses = df_actual.filter(pl.col("Amount") < 0)["Amount"].sum()
 
-    typer.echo(
-        f"Total income: {typer.style(f'{income:.2f} EUR', fg=typer.colors.GREEN)}"
-    )
-    typer.echo(
-        f"Total expenses: {typer.style(f'{expenses:.2f} EUR', fg=typer.colors.RED)}"
-    )
-    typer.echo(
-        f"Net: {typer.style(f'{(income + expenses):.2f} EUR', fg=typer.colors.YELLOW)}"
-    )
+    typer.echo(f"Total income: {typer.style(f'{income:.2f} EUR', fg=typer.colors.GREEN)}")
+    typer.echo(f"Total expenses: {typer.style(f'{expenses:.2f} EUR', fg=typer.colors.RED)}")
+    typer.echo(f"Net: {typer.style(f'{(income + expenses):.2f} EUR', fg=typer.colors.YELLOW)}")
 
     return df_actual
 
@@ -145,14 +134,10 @@ def convert_ing_to_actual(input_file: Path, output_file: Path):
 
     # Filter out summary rows - keep only rows with valid date format
     # Valid dates match DD.MM.YYYY pattern
-    df_actual = df_actual.filter(
-        pl.col("Date").str.contains(r"^\d{1,2}\.\d{1,2}\.\d{4}$")
-    )
+    df_actual = df_actual.filter(pl.col("Date").str.contains(r"^\d{1,2}\.\d{1,2}\.\d{4}$"))
 
     # Remove empty rows (if any)
-    df_actual = df_actual.filter(
-        pl.col("Date").is_not_null() & pl.col("Amount").is_not_null()
-    )
+    df_actual = df_actual.filter(pl.col("Date").is_not_null() & pl.col("Amount").is_not_null())
 
     # Convert date to ISO format (DD.MM.YYYY -> YYYY-MM-DD)
     df_actual = df_actual.with_columns(
@@ -162,12 +147,14 @@ def convert_ing_to_actual(input_file: Path, output_file: Path):
     # Convert amount to float - handle German number format
     # ING uses comma as decimal separator and dot as thousands separator
     # e.g., "1.234,56" -> "1234.56"
-    df_actual = df_actual.with_columns([
-        pl.col("Amount")
-        .str.replace_all(r"\.", "")  # Remove thousands separator (dots)
-        .str.replace(",", ".")  # Replace decimal comma with dot
-        .cast(pl.Float64)
-    ])
+    df_actual = df_actual.with_columns(
+        [
+            pl.col("Amount")
+            .str.replace_all(r"\.", "")  # Remove thousands separator (dots)
+            .str.replace(",", ".")  # Replace decimal comma with dot
+            .cast(pl.Float64)
+        ]
+    )
 
     # Replace empty payees with "Unknown"
     df_actual = df_actual.with_columns(
@@ -188,9 +175,7 @@ def convert_ing_to_actual(input_file: Path, output_file: Path):
     # Export as CSV (with dot as decimal separator for Actual Budget)
     df_actual.write_csv(output_file, separator=",", float_precision=2)
 
-    typer.echo(
-        typer.style("✅ Conversion successful!", fg=typer.colors.GREEN, bold=True)
-    )
+    typer.echo(typer.style("✅ Conversion successful!", fg=typer.colors.GREEN, bold=True))
     typer.echo(f"📊 {len(df_actual)} transactions converted")
     typer.echo(f"💾 Saved to: {output_file}")
     typer.echo(f"\n📋 First 5 rows:")
@@ -203,15 +188,9 @@ def convert_ing_to_actual(input_file: Path, output_file: Path):
     income = df_actual.filter(pl.col("Amount") > 0)["Amount"].sum()
     expenses = df_actual.filter(pl.col("Amount") < 0)["Amount"].sum()
 
-    typer.echo(
-        f"Total income: {typer.style(f'{income:.2f} EUR', fg=typer.colors.GREEN)}"
-    )
-    typer.echo(
-        f"Total expenses: {typer.style(f'{expenses:.2f} EUR', fg=typer.colors.RED)}"
-    )
-    typer.echo(
-        f"Net: {typer.style(f'{(income + expenses):.2f} EUR', fg=typer.colors.YELLOW)}"
-    )
+    typer.echo(f"Total income: {typer.style(f'{income:.2f} EUR', fg=typer.colors.GREEN)}")
+    typer.echo(f"Total expenses: {typer.style(f'{expenses:.2f} EUR', fg=typer.colors.RED)}")
+    typer.echo(f"Net: {typer.style(f'{(income + expenses):.2f} EUR', fg=typer.colors.YELLOW)}")
 
     return df_actual
 
@@ -278,8 +257,8 @@ def convert(
 
         # Generate default output filename if not provided
         if output_file is None:
-            min_date = df_result['Date'].min()
-            max_date = df_result['Date'].max()
+            min_date = df_result["Date"].min()
+            max_date = df_result["Date"].max()
             bank_name = format.value.replace("-", "_")
             output_file = Path(f"{bank_name}_{min_date}_to_{max_date}.csv")
 
@@ -292,9 +271,7 @@ def convert(
         Path("temp.csv").unlink(missing_ok=True)
 
     except Exception as e:
-        typer.echo(
-            typer.style(f"❌ Error: {str(e)}", fg=typer.colors.RED, bold=True), err=True
-        )
+        typer.echo(typer.style(f"❌ Error: {str(e)}", fg=typer.colors.RED, bold=True), err=True)
         raise typer.Exit(code=1)
 
 

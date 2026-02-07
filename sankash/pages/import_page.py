@@ -97,7 +97,7 @@ def preview_row(transaction: dict) -> rx.Component:
         rx.table.cell(transaction.get("date", "")),
         rx.table.cell(transaction.get("payee", "")),
         rx.table.cell(transaction.get("notes", "-")),
-        rx.table.cell(f"€{transaction.get('amount', 0):.2f}"),
+        rx.table.cell(rx.text("€", transaction.get("amount", 0))),
     )
 
 
@@ -107,7 +107,9 @@ def preview_table() -> rx.Component:
         rx.vstack(
             rx.heading("Preview", size="5"),
             rx.text(
-                f"Showing first {ImportState.preview_data.length()} transactions",
+                "Showing first ",
+                ImportState.preview_data.length(),
+                " transactions",
                 size="2",
                 color="gray",
             ),
@@ -136,21 +138,25 @@ def import_results() -> rx.Component:
             rx.callout(
                 rx.vstack(
                     rx.text(
-                        f"Successfully imported {ImportState.import_stats.get('imported', 0)} transactions!",
+                        "Successfully imported ",
+                        ImportState.import_stats.get("imported", 0),
+                        " transactions!",
                         size="3",
                         weight="bold",
                     ),
                     rx.cond(
                         ImportState.import_stats.get("duplicates", 0) > 0,
                         rx.text(
-                            f"{ImportState.import_stats.get('duplicates', 0)} duplicates were skipped.",
+                            ImportState.import_stats.get("duplicates", 0),
+                            " duplicates were skipped.",
                             size="2",
                         ),
                     ),
                     rx.cond(
                         ImportState.import_stats.get("categorized", 0) > 0,
                         rx.text(
-                            f"{ImportState.import_stats.get('categorized', 0)} transactions were auto-categorized by rules.",
+                            ImportState.import_stats.get("categorized", 0),
+                            " transactions were auto-categorized by rules.",
                             size="2",
                         ),
                     ),
@@ -165,7 +171,7 @@ def import_results() -> rx.Component:
                     rx.vstack(
                         rx.text("Total", size="2", color="gray"),
                         rx.text(
-                            str(ImportState.import_stats.get("total", 0)),
+                            ImportState.import_stats.get("total", 0),
                             size="6",
                             weight="bold",
                         ),
@@ -175,7 +181,7 @@ def import_results() -> rx.Component:
                     rx.vstack(
                         rx.text("Imported", size="2", color="gray"),
                         rx.text(
-                            str(ImportState.import_stats.get("imported", 0)),
+                            ImportState.import_stats.get("imported", 0),
                             size="6",
                             weight="bold",
                             color="green",
@@ -186,7 +192,7 @@ def import_results() -> rx.Component:
                     rx.vstack(
                         rx.text("Duplicates", size="2", color="gray"),
                         rx.text(
-                            str(ImportState.import_stats.get("duplicates", 0)),
+                            ImportState.import_stats.get("duplicates", 0),
                             size="6",
                             weight="bold",
                             color="orange",
@@ -197,7 +203,7 @@ def import_results() -> rx.Component:
                     rx.vstack(
                         rx.text("Auto-Categorized", size="2", color="gray"),
                         rx.text(
-                            str(ImportState.import_stats.get("categorized", 0)),
+                            ImportState.import_stats.get("categorized", 0),
                             size="6",
                             weight="bold",
                             color="blue",
@@ -231,7 +237,12 @@ def history_row(import_record: dict) -> rx.Component:
             ),
         ),
         rx.table.cell(
-            f"{import_record.get('account_name', '')} ({import_record.get('account_bank', '')})",
+            rx.text(
+                import_record.get("account_name", ""),
+                " (",
+                import_record.get("account_bank", ""),
+                ")",
+            ),
         ),
         rx.table.cell(
             rx.badge(
@@ -242,13 +253,13 @@ def history_row(import_record: dict) -> rx.Component:
         ),
         rx.table.cell(
             rx.text(
-                str(import_record.get("total_count", 0)),
+                import_record["total_count"],
                 size="2",
             ),
         ),
         rx.table.cell(
             rx.text(
-                str(import_record.get("imported_count", 0)),
+                import_record["imported_count"],
                 size="2",
                 color="green",
                 weight="medium",
@@ -256,16 +267,27 @@ def history_row(import_record: dict) -> rx.Component:
         ),
         rx.table.cell(
             rx.text(
-                str(import_record.get("duplicate_count", 0)),
+                import_record["duplicate_count"],
                 size="2",
                 color="orange",
             ),
         ),
         rx.table.cell(
             rx.text(
-                str(import_record.get("categorized_count", 0)),
+                import_record["categorized_count"],
                 size="2",
                 color="blue",
+            ),
+        ),
+        rx.table.cell(
+            rx.cond(
+                import_record["remaining_count"] == 0,
+                rx.badge("Deleted", color_scheme="red", size="1"),
+                rx.text(
+                    import_record["remaining_count"],
+                    size="2",
+                    weight="medium",
+                ),
             ),
         ),
     )
@@ -292,6 +314,7 @@ def import_history_section() -> rx.Component:
                         rx.table.column_header_cell("Imported"),
                         rx.table.column_header_cell("Duplicates"),
                         rx.table.column_header_cell("Categorized"),
+                        rx.table.column_header_cell("Remaining"),
                     ),
                 ),
                 rx.table.body(rx.foreach(ImportState.import_history, history_row)),
@@ -302,7 +325,7 @@ def import_history_section() -> rx.Component:
     )
 
 
-@rx.page(route="/import", on_load=[ImportState.load_accounts, ImportState.load_import_history])
+@rx.page(route="/import", on_load=[ImportState.reset_ui, ImportState.load_accounts, ImportState.load_import_history])
 def import_page() -> rx.Component:
     """CSV import page."""
     return layout(
