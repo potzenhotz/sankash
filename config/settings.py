@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 class Settings(BaseModel):
     """Application settings."""
 
-    db_path: str = Field(default="sankash.duckdb")
+    data_dir: str = Field(default="data")
     default_currency: str = Field(default="EUR")
     date_format: str = Field(default="%Y-%m-%d")
     import_chunk_size: int = Field(default=1000)

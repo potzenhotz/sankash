@@ -2,12 +2,12 @@
 
 import pytest
 from pathlib import Path
-from sankash.core.database import init_database
+from sankash.core.storage import init_data_dir
 
 
 @pytest.fixture
-def test_db_path(tmp_path: Path) -> str:
-    """Create a temporary test database."""
-    db_path = str(tmp_path / "test.duckdb")
-    init_database(db_path)
-    return db_path
+def test_data_dir(tmp_path: Path) -> str:
+    """Create a temporary data directory for testing."""
+    data_dir = str(tmp_path / "data")
+    init_data_dir(data_dir)
+    return data_dir

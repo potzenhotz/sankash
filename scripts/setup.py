@@ -7,31 +7,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import load_settings
-from sankash.core.database import init_database
+from sankash.core.storage import init_data_dir
 
 
 def main() -> None:
     """Run complete setup."""
-    print("🚀 Setting up Sankash...")
+    print("Setting up Sankash...")
     print()
 
     # Load settings
     settings = load_settings()
-    db_path = settings.db_path
+    data_dir = settings.data_dir
 
-    # Initialize database
-    print(f"📊 Initializing database at: {db_path}")
-    init_database(db_path)
-    print("✅ Database initialized")
+    # Initialize data directory
+    print(f"Initializing data directory at: {data_dir}")
+    init_data_dir(data_dir)
+    print("Data directory initialized")
     print()
 
-    # Seed categories (commented out - users can create their own)
-    # print("🏷️  Seeding default categories...")
-    # seed_default_categories(db_path)
-    # print("✅ Default categories created")
-    # print()
-
-    print("✨ Setup complete!")
+    print("Setup complete!")
     print()
     print("Next steps:")
     print("  1. Run: reflex run")

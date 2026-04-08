@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import plotly.graph_objects as go
 import reflex as rx
 
-from sankash.services import analytics_service, transaction_service
+from sankash.services import analytics_service, transaction_service, account_service
 from sankash.state.base import BaseState
 
 
@@ -24,6 +24,14 @@ class DashboardState(BaseState):
     selected_month: int = 0
     date_range_days: int = 30  # For slider
 
+    # Account filter
+    accounts: list[dict] = []
+    selected_account_id: int = 0  # 0 = all accounts
+
+    # Category filter
+    all_categories: list[str] = []
+    excluded_categories: list[str] = []
+
     # KPIs
     income: float = 0.0
     expense: float = 0.0
@@ -34,6 +42,11 @@ class DashboardState(BaseState):
     sankey_nodes: list[dict] = []
     sankey_links: list[dict] = []
 
+    # Category detail
+    selected_detail_category: str = ""
+    detail_transactions: list[dict] = []
+    detail_total: float = 0.0
+
     # Trend data
     trend_dates: list[str] = []
     trend_expenses: list[float] = []
@@ -41,6 +54,29 @@ class DashboardState(BaseState):
 
     # Available months/years with data
     available_months: list[dict] = []
+
+    @rx.var
+    def account_options(self) -> list[str]:
+        """Get account options for the selector."""
+        options = ["All Accounts"]
+        for acc in self.accounts:
+            options.append(acc["name"])
+        return options
+
+    @rx.var
+    def selected_account_display(self) -> str:
+        """Get display name for selected account."""
+        if self.selected_account_id == 0:
+            return "All Accounts"
+        for acc in self.accounts:
+            if acc["id"] == self.selected_account_id:
+                return acc["name"]
+        return "All Accounts"
+
+    @rx.var
+    def detail_category_options(self) -> list[str]:
+        """Category options for the detail dropdown."""
+        return sorted(self.all_categories)
 
     @rx.var
     def selected_month_name(self) -> str:
@@ -255,14 +291,108 @@ class DashboardState(BaseState):
 
         return fig
 
+    def set_selected_account(self, account_name: str) -> None:
+        """Set selected account from dropdown."""
+        if account_name == "All Accounts":
+            self.selected_account_id = 0
+        else:
+            for acc in self.accounts:
+                if acc["name"] == account_name:
+                    self.selected_account_id = acc["id"]
+                    break
+        self.load_dashboard()
+
+    def select_detail_category(self, category: str) -> None:
+        """Load transactions for a selected category."""
+        import polars as pl
+
+        if not category or category == self.selected_detail_category:
+            # Toggle off if clicking same category
+            self.selected_detail_category = ""
+            self.detail_transactions = []
+            self.detail_total = 0.0
+            return
+
+        self.selected_detail_category = category
+
+        try:
+            start = date.fromisoformat(self.start_date)
+            end = date.fromisoformat(self.end_date)
+            account_ids = [self.selected_account_id] if self.selected_account_id > 0 else None
+
+            df = analytics_service.get_transactions_for_period(
+                self.data_dir, start, end, account_ids=account_ids,
+            )
+
+            if not df.is_empty():
+                filtered = df.filter(pl.col("category") == category)
+                filtered = filtered.sort("date", descending=True)
+
+                # Ensure notes column exists
+                if "notes" not in filtered.columns:
+                    filtered = filtered.with_columns(pl.lit("").alias("notes"))
+
+                filtered = filtered.select(
+                    [c for c in ["date", "payee", "amount", "notes"] if c in filtered.columns]
+                )
+
+                self.detail_transactions = filtered.to_dicts()
+                self.detail_total = float(filtered["amount"].sum())
+            else:
+                self.detail_transactions = []
+                self.detail_total = 0.0
+        except Exception:
+            self.detail_transactions = []
+            self.detail_total = 0.0
+
+    def handle_sankey_click(self, points: list[dict]) -> None:
+        """Handle click on a Sankey node to drill into that category."""
+        try:
+            if not points:
+                return
+            point = points[0]
+            # Use pointNumber to look up the node label from sankey_nodes
+            point_number = point.get("pointNumber")
+            if point_number is not None and point_number < len(self.sankey_nodes):
+                label = self.sankey_nodes[point_number]["label"]
+                if label in self.all_categories:
+                    self.select_detail_category(label)
+        except Exception:
+            pass
+
+    def toggle_category(self, category: str) -> None:
+        """Toggle a category between included and excluded."""
+        if category in self.excluded_categories:
+            self.excluded_categories.remove(category)
+        else:
+            self.excluded_categories.append(category)
+        self.load_dashboard()
+
+    def exclude_all_categories(self) -> None:
+        """Exclude all categories."""
+        self.excluded_categories = list(self.all_categories)
+        self.load_dashboard()
+
+    def include_all_categories(self) -> None:
+        """Include all categories."""
+        self.excluded_categories = []
+        self.load_dashboard()
+
     def load_dashboard(self) -> None:
         """Load dashboard data."""
         self.loading = True
         self.error = ""
 
         try:
+            # Load accounts
+            accounts_df = account_service.get_accounts(self.data_dir)
+            self.accounts = accounts_df.to_dicts() if not accounts_df.is_empty() else []
+
+            # Build account filter
+            account_ids = [self.selected_account_id] if self.selected_account_id > 0 else None
+
             # Load available months/years with data
-            available_df = analytics_service.get_available_months(self.db_path)
+            available_df = analytics_service.get_available_months(self.data_dir)
             if not available_df.is_empty():
                 self.available_months = available_df.to_dicts()
             else:
@@ -312,10 +442,26 @@ class DashboardState(BaseState):
 
             # Get transactions for period
             df = analytics_service.get_transactions_for_period(
-                self.db_path,
+                self.data_dir,
                 start,
                 end,
+                account_ids=account_ids,
             )
+
+            # Collect all categories from the data
+            import polars as pl
+            if not df.is_empty() and "category" in df.columns:
+                cats = df.filter(pl.col("category").is_not_null())["category"].unique().sort().to_list()
+                self.all_categories = cats
+            else:
+                self.all_categories = []
+
+            # Filter out excluded categories
+            if self.excluded_categories and not df.is_empty():
+                df = df.filter(
+                    pl.col("category").is_null()
+                    | ~pl.col("category").is_in(self.excluded_categories)
+                )
 
             # Calculate KPIs
             kpis = analytics_service.calculate_income_expense(df)
@@ -325,7 +471,7 @@ class DashboardState(BaseState):
 
             # Get uncategorized count
             self.uncategorized_count = transaction_service.get_uncategorized_count(
-                self.db_path
+                self.data_dir
             )
 
             # Prepare Sankey data
@@ -333,18 +479,23 @@ class DashboardState(BaseState):
             self.sankey_nodes = sankey_data["nodes"]
             self.sankey_links = sankey_data["links"]
 
-            # Calculate spending trend (daily aggregation)
-            trend_df = analytics_service.calculate_spending_trend(
-                self.db_path,
-                start,
-                end,
-                frequency="D",  # Daily
-            )
-
-            if not trend_df.is_empty():
-                self.trend_dates = [str(d) for d in trend_df["date"].to_list()]
-                self.trend_expenses = [float(x) for x in trend_df["expense"].to_list()]
-                self.trend_income = [float(x) for x in trend_df["income"].to_list()]
+            # Calculate spending trend (daily aggregation — uses filtered df)
+            if not df.is_empty() and "date" in df.columns:
+                daily = (
+                    df.group_by("date")
+                    .agg([
+                        pl.col("amount").filter(pl.col("amount") > 0).sum().alias("income"),
+                        pl.col("amount").filter(pl.col("amount") < 0).sum().abs().alias("expense"),
+                    ])
+                    .sort("date")
+                    .with_columns([
+                        pl.col("income").fill_null(0),
+                        pl.col("expense").fill_null(0),
+                    ])
+                )
+                self.trend_dates = [str(d) for d in daily["date"].to_list()]
+                self.trend_expenses = [float(x) for x in daily["expense"].to_list()]
+                self.trend_income = [float(x) for x in daily["income"].to_list()]
             else:
                 self.trend_dates = []
                 self.trend_expenses = []

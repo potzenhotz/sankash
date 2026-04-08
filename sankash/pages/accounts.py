@@ -21,11 +21,6 @@ def account_form() -> rx.Component:
                 value=AccountState.form_bank,
                 on_change=AccountState.set_form_bank,
             ),
-            rx.input(
-                placeholder="Account Number",
-                value=AccountState.form_account_number,
-                on_change=AccountState.set_form_account_number,
-            ),
             rx.select(
                 ["EUR", "USD", "GBP"],
                 value=AccountState.form_currency,
@@ -51,7 +46,6 @@ def account_row(account: dict) -> rx.Component:
     return rx.table.row(
         rx.table.cell(account["name"]),
         rx.table.cell(account["bank"]),
-        rx.table.cell(account["account_number"]),
         rx.table.cell(
             rx.text(
                 f"€{account['balance']:.2f}",
@@ -91,7 +85,6 @@ def accounts_table() -> rx.Component:
                     rx.table.row(
                         rx.table.column_header_cell("Name"),
                         rx.table.column_header_cell("Bank"),
-                        rx.table.column_header_cell("Account Number"),
                         rx.table.column_header_cell("Balance"),
                         rx.table.column_header_cell("Transactions"),
                         rx.table.column_header_cell("Status"),

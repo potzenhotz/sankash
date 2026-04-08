@@ -11,8 +11,7 @@ class Account(BaseModel):
 
     id: Optional[int] = None
     name: str
-    bank: str
-    account_number: str
+    bank: str = ""
     currency: str = "EUR"
     is_active: bool = True
 

@@ -1,306 +1,359 @@
 """Rules page state management."""
 
+import json
+
 import reflex as rx
 
-from sankash.core.models import Rule, RuleAction, RuleCondition
-from sankash.services import rule_service, category_service
+from sankash.core.models import RuleCondition
+from sankash.services import rule_service, category_service, transaction_service
 from sankash.state.base import BaseState
 
 
 class RuleState(BaseState):
-    """State for rules management page."""
+    """State for rules management — one rule per category, no create/delete."""
 
-    state_auto_setters = True  # Explicitly enable auto setters
+    state_auto_setters = True
 
-    rules: list[dict] = []
-    categories: list[str] = []
-    category_display_map: dict[str, str] = {}  # Maps display name -> actual name
+    # All categories with their rule info (one row per category)
+    category_rules: list[dict] = []
     loading: bool = False
     error: str = ""
     success: str = ""
 
-    # Form fields
-    form_name: str = ""
-    form_match_type: str = "any"  # "all" for AND, "any" for OR
+    # Inline editing: which category is currently being edited
+    editing_category: str = ""
+    conditions: list[dict] = []  # Current conditions being edited
 
-    # Multiple conditions
-    conditions: list[dict] = []  # List of {field, operator, value}
+    # Category display mapping
+    categories: list[str] = []
+    category_display_map: dict[str, str] = {}
 
-    # Action fields
-    action_type: str = "set_category"
-    action_value: str = ""
+    # Uncategorized transactions
+    uncategorized_transactions: list[dict] = []
+    uncategorized_count: int = 0
 
-    # Test results
-    test_results: list[dict] = []
-    show_test_results: bool = False
-
-    # Edit mode
-    editing_id: int | None = None
+    # Quick-assign
+    assigning_tx_payee: str = ""
 
     def load_rules(self) -> None:
-        """Load all rules."""
-        import json
-
+        """Load all categories with their rule info."""
         self.loading = True
         self.error = ""
 
         try:
-            df = rule_service.get_rules(self.db_path, active_only=False)
-            rules_list = df.to_dicts()
+            # Run migration on first load
+            merges = rule_service.migrate_rules_to_category_based(self.data_dir)
+            if merges:
+                self.success = f"Migrated rules: merged {merges} duplicate(s)"
 
-            # Format conditions and actions for display
-            for rule in rules_list:
-                conditions = json.loads(rule["conditions"]) if isinstance(rule["conditions"], str) else rule["conditions"]
-                actions = json.loads(rule["actions"]) if isinstance(rule["actions"], str) else rule["actions"]
+            # Get all categories
+            cat_df = category_service.get_categories(self.data_dir)
+            all_cats = cat_df.to_dicts() if not cat_df.is_empty() else []
 
-                # Get match_type (default to "any" if not present for backward compatibility)
-                match_type = rule.get("match_type", "any")
-                rule["match_type"] = match_type
+            # Get all rules indexed by target category
+            rules_df = rule_service.get_rules(self.data_dir, active_only=False)
+            rules_by_category: dict[str, dict] = {}
+            if not rules_df.is_empty():
+                for rule in rules_df.to_dicts():
+                    conditions = json.loads(rule["conditions"]) if isinstance(rule["conditions"], str) else rule["conditions"]
+                    actions = json.loads(rule["actions"]) if isinstance(rule["actions"], str) else rule["actions"]
+                    target_cat = actions[0]["value"] if actions else ""
+                    if target_cat:
+                        rules_by_category[target_cat] = {
+                            "rule_id": rule["id"],
+                            "conditions": conditions,
+                            "is_active": rule.get("is_active", True),
+                            "priority": rule.get("priority", 0),
+                        }
 
-                # Format multiple conditions
+            # Build one row per category
+            category_rules = []
+            for cat in all_cats:
+                cat_name = cat["name"]
+                display_name = category_service.get_category_display_name(
+                    self.data_dir, cat_name
+                )
+                rule_info = rules_by_category.get(cat_name, {})
+                conditions = rule_info.get("conditions", [])
+
+                # Count matches
+                match_count = 0
                 if conditions:
-                    match_text = " AND " if match_type == "all" else " OR "
-                    condition_parts = [
-                        f"{cond['field']} {cond['operator']} '{cond['value']}'"
-                        for cond in conditions
-                    ]
-                    rule["condition_text"] = match_text.join(condition_parts)
+                    try:
+                        from sankash.core.models import Rule, RuleAction
+                        parsed = Rule(
+                            name=cat_name,
+                            priority=rule_info.get("priority", 0),
+                            is_active=rule_info.get("is_active", True),
+                            match_type="any",
+                            conditions=[RuleCondition(**c) for c in conditions],
+                            actions=[RuleAction(action_type="set_category", value=cat_name)],
+                        )
+                        match_count = rule_service.count_matching_transactions(self.data_dir, parsed)
+                    except Exception:
+                        pass
+
+                # Format conditions for display
+                if conditions:
+                    parts = [f"{c['field']} {c['operator']} '{c['value']}'" for c in conditions]
+                    condition_text = " OR ".join(parts)
                 else:
-                    rule["condition_text"] = "-"
+                    condition_text = ""
 
-                # Add formatted action text
-                rule["action_text"] = f"{actions[0]['action_type']}: {actions[0]['value']}" if actions else "-"
+                category_rules.append({
+                    "category": cat_name,
+                    "display_name": display_name,
+                    "rule_id": rule_info.get("rule_id", 0),
+                    "has_conditions": len(conditions) > 0,
+                    "conditions": conditions,
+                    "condition_text": condition_text,
+                    "condition_count": len(conditions),
+                    "match_count": match_count,
+                    "is_active": rule_info.get("is_active", True),
+                    "priority": rule_info.get("priority", 0),
+                })
 
-                # Count matching transactions
-                try:
-                    parsed_rule = rule_service.parse_rule_from_row(rule)
-                    rule["match_count"] = rule_service.count_matching_transactions(self.db_path, parsed_rule)
-                except Exception:
-                    rule["match_count"] = 0
-
-            self.rules = rules_list
+            # Sort: categories with conditions first (by match count desc), then without (alphabetically)
+            category_rules.sort(
+                key=lambda r: (not r["has_conditions"], -r["match_count"], r["display_name"])
+            )
+            self.category_rules = category_rules
         except Exception as e:
             self.error = f"Failed to load rules: {str(e)}"
         finally:
             self.loading = False
 
     def load_categories(self) -> None:
-        """Load available categories with hierarchical display names."""
+        """Load category display names for quick-assign."""
         try:
-            df = category_service.get_categories(self.db_path)
+            df = category_service.get_categories(self.data_dir)
             categories = df.to_dicts()
 
-            # Build list of display names and mapping
             display_names = []
             display_map = {}
 
             for cat in categories:
                 display_name = category_service.get_category_display_name(
-                    self.db_path, cat["name"]
+                    self.data_dir, cat["name"]
                 )
                 display_names.append(display_name)
                 display_map[display_name] = cat["name"]
 
-            # Sort categories alphabetically
             display_names.sort()
-
             self.categories = display_names
             self.category_display_map = display_map
         except Exception as e:
             self.error = f"Failed to load categories: {str(e)}"
 
+    def load_uncategorized(self) -> None:
+        """Load uncategorized transactions for the side panel."""
+        try:
+            df, total = transaction_service.get_transactions(
+                self.data_dir,
+                is_categorized=False,
+                sort_by="date",
+                sort_order="desc",
+                limit=100,
+            )
+            self.uncategorized_transactions = df.to_dicts() if not df.is_empty() else []
+            self.uncategorized_count = total
+        except Exception:
+            self.uncategorized_transactions = []
+            self.uncategorized_count = 0
+
+    # --- Inline editing ---
+
+    def start_editing(self, category: str) -> None:
+        """Open inline editor for a category's conditions."""
+        self.editing_category = category
+        self.error = ""
+        self.success = ""
+
+        # Load existing conditions for this category
+        existing = rule_service.get_rule_for_category(self.data_dir, category)
+        if existing:
+            conditions = existing.get("conditions", [])
+            if isinstance(conditions, str):
+                conditions = json.loads(conditions)
+            self.conditions = [dict(c) for c in conditions]
+        else:
+            self.conditions = []
+
+    def stop_editing(self) -> None:
+        """Close inline editor."""
+        self.editing_category = ""
+        self.conditions = []
+
     def add_condition(self) -> None:
-        """Add a new condition to the list."""
-        self.conditions.append({
-            "field": "payee",
-            "operator": "contains",
-            "value": ""
-        })
+        """Add empty condition to editor."""
+        self.conditions.append({"field": "payee", "operator": "contains", "value": ""})
 
     def remove_condition(self, index: int) -> None:
-        """Remove a condition by index."""
+        """Remove condition from editor."""
         if 0 <= index < len(self.conditions):
             self.conditions.pop(index)
 
     def update_condition_field(self, index: int, field: str) -> None:
-        """Update condition field."""
         if 0 <= index < len(self.conditions):
             self.conditions[index]["field"] = field
 
     def update_condition_operator(self, index: int, operator: str) -> None:
-        """Update condition operator."""
         if 0 <= index < len(self.conditions):
             self.conditions[index]["operator"] = operator
 
     def update_condition_value(self, index: int, value: str) -> None:
-        """Update condition value."""
         if 0 <= index < len(self.conditions):
             self.conditions[index]["value"] = value
 
-    def edit_rule(self, rule_id: int) -> None:
-        """Load rule data into form for editing."""
-        import json
-
-        try:
-            # Get the rule
-            rules_df = rule_service.get_rules(self.db_path, active_only=False)
-            rule_data = rules_df.filter(rules_df["id"] == rule_id).to_dicts()[0]
-
-            # Parse conditions and actions
-            conditions = json.loads(rule_data["conditions"]) if isinstance(rule_data["conditions"], str) else rule_data["conditions"]
-            actions = json.loads(rule_data["actions"]) if isinstance(rule_data["actions"], str) else rule_data["actions"]
-
-            # Set editing mode
-            self.editing_id = rule_id
-            self.form_name = rule_data["name"]
-            self.form_match_type = rule_data.get("match_type", "all")
-            self.conditions = conditions
-            self.action_type = actions[0]["action_type"] if actions else "set_category"
-            self.action_value = actions[0]["value"] if actions else ""
-
-            # Clear messages
-            self.error = ""
-            self.success = ""
-        except Exception as e:
-            self.error = f"Failed to load rule: {str(e)}"
-
-    def create_rule(self) -> None:
-        """Create or update rule from form data."""
-        if not self.form_name or not self.conditions or not self.action_value:
-            self.error = "Please fill in all fields and add at least one condition"
+    def save_conditions(self) -> None:
+        """Save conditions for the currently editing category."""
+        if not self.editing_category:
             return
 
-        # Validate that all conditions have values
+        # Validate non-empty values
         for cond in self.conditions:
             if not cond.get("value"):
                 self.error = "All conditions must have a value"
                 return
 
         try:
-            # Convert display name to actual category name
-            actual_category = self.category_display_map.get(
-                self.action_value, self.action_value
-            )
+            category = self.editing_category
+            existing = rule_service.get_rule_for_category(self.data_dir, category)
 
-            # Convert conditions to RuleCondition objects
+            if not self.conditions:
+                # No conditions — delete the rule if it exists
+                if existing:
+                    rule_service.delete_rule(self.data_dir, existing["id"])
+                self.stop_editing()
+                self.load_rules()
+                self.success = f"Conditions cleared for '{category}'"
+                return
+
+            from sankash.core.models import Rule, RuleAction
             rule_conditions = [
-                RuleCondition(
-                    field=cond["field"],
-                    operator=cond["operator"],
-                    value=cond["value"]
-                )
-                for cond in self.conditions
+                RuleCondition(field=c["field"], operator=c["operator"], value=c["value"])
+                for c in self.conditions
             ]
 
             rule = Rule(
-                name=self.form_name,
-                priority=0,  # Default priority, will be editable inline
-                is_active=True,  # Default active, will be editable inline
-                match_type=self.form_match_type,
+                name=category,
+                priority=existing.get("priority", 0) if existing else 0,
+                is_active=existing.get("is_active", True) if existing else True,
+                match_type="any",
                 conditions=rule_conditions,
-                actions=[
-                    RuleAction(
-                        action_type=self.action_type,
-                        value=actual_category,
-                    )
-                ],
+                actions=[RuleAction(action_type="set_category", value=category)],
             )
 
-            rule_name = self.form_name
-
-            if self.editing_id:
-                # Update existing rule
-                rule_service.update_rule(self.db_path, self.editing_id, rule)
-                success_msg = f"Rule '{rule_name}' updated successfully"
+            if existing:
+                rule_service.update_rule(self.data_dir, existing["id"], rule)
             else:
-                # Create new rule
-                rule_service.create_rule(self.db_path, rule)
-                success_msg = f"Rule '{rule_name}' created successfully"
+                rule_service.create_rule(self.data_dir, rule)
 
-            # Clear form first
-            self.clear_form()
-            # Reload rules to get updated data
+            self.stop_editing()
             self.load_rules()
-            # Set success message after reload
-            self.success = success_msg
+            self.success = f"Conditions saved for '{category}'"
         except Exception as e:
-            self.error = f"Failed to save rule: {str(e)}"
+            self.error = f"Failed to save conditions: {str(e)}"
 
-    def delete_rule(self, rule_id: int) -> None:
-        """Delete a rule."""
-        try:
-            rule_service.delete_rule(self.db_path, rule_id)
-            self.load_rules()
-            self.success = "Rule deleted successfully"
-        except Exception as e:
-            self.error = f"Failed to delete rule: {str(e)}"
-
-    def toggle_rule_active(self, rule_id: int, current_active: bool) -> None:
+    def toggle_rule_active(self, category: str, current_active: bool) -> None:
         """Toggle rule active status."""
         try:
-            # Get the rule
-            rules_df = rule_service.get_rules(self.db_path, active_only=False)
-            rule_data = rules_df.filter(rules_df["id"] == rule_id).to_dicts()[0]
-            rule = rule_service.parse_rule_from_row(rule_data)
-
-            # Toggle active
+            existing = rule_service.get_rule_for_category(self.data_dir, category)
+            if not existing:
+                return
+            rule = rule_service.parse_rule_from_row(existing)
             rule.is_active = not current_active
-
-            # Update
-            rule_service.update_rule(self.db_path, rule_id, rule)
+            rule_service.update_rule(self.data_dir, existing["id"], rule)
             self.load_rules()
         except Exception as e:
             self.error = f"Failed to toggle rule: {str(e)}"
 
-    def update_rule_priority(self, rule_id: int, new_priority: str) -> None:
+    def update_rule_priority(self, category: str, new_priority: str) -> None:
         """Update rule priority."""
         try:
-            # Get the rule
-            rules_df = rule_service.get_rules(self.db_path, active_only=False)
-            rule_data = rules_df.filter(rules_df["id"] == rule_id).to_dicts()[0]
-            rule = rule_service.parse_rule_from_row(rule_data)
-
-            # Update priority
+            existing = rule_service.get_rule_for_category(self.data_dir, category)
+            if not existing:
+                return
+            rule = rule_service.parse_rule_from_row(existing)
             rule.priority = int(new_priority) if new_priority else 0
-
-            # Update
-            rule_service.update_rule(self.db_path, rule_id, rule)
+            rule_service.update_rule(self.data_dir, existing["id"], rule)
             self.load_rules()
         except Exception as e:
             self.error = f"Failed to update priority: {str(e)}"
 
-    def apply_rules(self) -> None:
-        """Apply all active rules to uncategorized transactions."""
+    # --- Quick-assign from uncategorized panel ---
+
+    def start_assign(self, payee: str) -> None:
+        """Start quick-assign flow for a transaction payee."""
+        self.assigning_tx_payee = payee
+
+    def quick_assign_category(self, category_display: str) -> None:
+        """Add the payee as a condition to the selected category's rule."""
+        if not self.assigning_tx_payee or not category_display:
+            return
+
         try:
-            count = rule_service.apply_rules_to_uncategorized(self.db_path)
-            # Reload rules to update match counts
+            actual_category = self.category_display_map.get(
+                category_display, category_display
+            )
+            condition = RuleCondition(
+                field="payee",
+                operator="contains",
+                value=self.assigning_tx_payee,
+            )
+            rule_service.add_condition_to_category(self.data_dir, actual_category, condition)
+            self.assigning_tx_payee = ""
             self.load_rules()
+            self.success = f"Added '{condition.value}' to {actual_category}"
+        except Exception as e:
+            self.error = f"Failed to assign: {str(e)}"
+
+    def cancel_assign(self) -> None:
+        """Cancel quick-assign."""
+        self.assigning_tx_payee = ""
+
+    # --- Apply rules ---
+
+    def apply_rules(self) -> None:
+        """Apply rules to uncategorized transactions."""
+        try:
+            count = rule_service.apply_rules_to_uncategorized(self.data_dir)
+            self.load_rules()
+            self.load_uncategorized()
             self.success = f"Categorized {count} transactions"
         except Exception as e:
             self.error = f"Failed to apply rules: {str(e)}"
 
-    def test_rule(self, rule_id: int) -> None:
-        """Test a rule and show matching transactions."""
+    def apply_rules_all(self) -> None:
+        """Re-apply all rules (rules dominate, manual fallback preserved)."""
         try:
-            # Get the rule
-            rules_df = rule_service.get_rules(self.db_path, active_only=False)
-            rule_data = rules_df.filter(rules_df["id"] == rule_id).to_dicts()[0]
-            rule = rule_service.parse_rule_from_row(rule_data)
-
-            # Test rule
-            matches_df = rule_service.test_rule(self.db_path, rule, limit=50)
-            self.test_results = matches_df.to_dicts() if not matches_df.is_empty() else []
-            self.show_test_results = True
+            count = rule_service.apply_rules_to_all(self.data_dir)
+            self.load_rules()
+            self.load_uncategorized()
+            self.success = f"Re-categorized {count} transactions"
         except Exception as e:
-            self.error = f"Failed to test rule: {str(e)}"
+            self.error = f"Failed to apply rules: {str(e)}"
 
-    def clear_form(self) -> None:
-        """Clear form fields."""
-        self.form_name = ""
-        self.form_match_type = "any"
-        self.conditions = []
-        self.action_type = "set_category"
-        self.action_value = ""
-        self.editing_id = None
-        self.error = ""
-        self.success = ""
+    # --- Export/Import ---
+
+    def export_rules(self) -> rx.Component:
+        """Export rules as YAML."""
+        try:
+            yaml_content = rule_service.export_rules(self.data_dir)
+            return rx.download(data=yaml_content, filename="rules.yaml")
+        except Exception as e:
+            self.error = f"Failed to export rules: {str(e)}"
+
+    async def handle_rules_upload(self, files: list[rx.UploadFile]) -> None:
+        """Import rules from YAML."""
+        if not files:
+            return
+        try:
+            file = files[0]
+            content = (await file.read()).decode("utf-8")
+            added, updated = rule_service.import_rules(self.data_dir, content)
+            self.load_rules()
+            self.load_uncategorized()
+            self.success = f"Added {added} rules, updated {updated} existing"
+        except Exception as e:
+            self.error = f"Failed to import rules: {str(e)}"

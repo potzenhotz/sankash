@@ -25,10 +25,10 @@ class SettingsState(BaseState):
         self.success_message = ""
         try:
             self.ollama_base_url = settings_service.get_setting(
-                self.db_path, "ollama_base_url", "http://localhost:11434"
+                self.data_dir, "ollama_base_url", "http://localhost:11434"
             )
             self.ollama_model = settings_service.get_setting(
-                self.db_path, "ollama_model", "llama3.2"
+                self.data_dir, "ollama_model", "llama3.2"
             )
         except Exception as e:
             self.error = f"Failed to load settings: {e}"
@@ -40,10 +40,10 @@ class SettingsState(BaseState):
         self.success_message = ""
         try:
             settings_service.set_setting(
-                self.db_path, "ollama_base_url", self.ollama_base_url.strip()
+                self.data_dir, "ollama_base_url", self.ollama_base_url.strip()
             )
             settings_service.set_setting(
-                self.db_path, "ollama_model", self.ollama_model.strip()
+                self.data_dir, "ollama_model", self.ollama_model.strip()
             )
             self.success_message = "Settings saved"
         except Exception as e:

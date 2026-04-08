@@ -63,11 +63,9 @@ def convert_deutsche_bank_csv(file_path: str | Path) -> pl.DataFrame:
         pl.col("date").is_not_null() & pl.col("amount").is_not_null()
     )
 
-    # Convert date to ISO format (YYYY-MM-DD)
+    # Convert date to Date type
     df_standard = df_standard.with_columns([
-        pl.col("date")
-        .str.strptime(pl.Date, "%d.%m.%Y")
-        .dt.strftime("%Y-%m-%d")
+        pl.col("date").str.strptime(pl.Date, "%d.%m.%Y")
     ])
 
     # Convert German number format to float
@@ -145,11 +143,9 @@ def convert_ing_csv(file_path: str | Path) -> pl.DataFrame:
         pl.col("date").is_not_null() & pl.col("amount").is_not_null()
     )
 
-    # Convert date to ISO format (YYYY-MM-DD)
+    # Convert date to Date type
     df_standard = df_standard.with_columns([
-        pl.col("date")
-        .str.strptime(pl.Date, "%d.%m.%Y")
-        .dt.strftime("%Y-%m-%d")
+        pl.col("date").str.strptime(pl.Date, "%d.%m.%Y")
     ])
 
     # Convert German number format to float

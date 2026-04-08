@@ -12,10 +12,10 @@ class BaseState(rx.State):
     state_auto_setters = True
 
     @property
-    def db_path(self) -> str:
-        """Get database path from settings."""
+    def data_dir(self) -> str:
+        """Get data directory path from settings."""
         settings = load_settings()
-        return settings.db_path
+        return settings.data_dir
 
     @property
     def default_currency(self) -> str:

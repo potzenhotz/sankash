@@ -5,51 +5,63 @@ from typing import Optional
 
 import polars as pl
 
-from sankash.core.database import execute_query
+from sankash.core.storage import merge_overrides, read_overrides, read_parquet, read_yaml
 
 
-def get_available_months(db_path: str) -> pl.DataFrame:
+def get_available_months(data_dir: str) -> pl.DataFrame:
     """
-    Get distinct months/years that have transaction data (pure function).
+    Get distinct months/years that have transaction data.
 
     Returns DataFrame with columns: year, month, transaction_count
     Sorted by year and month descending (most recent first).
     """
-    query = """
-    SELECT
-        DISTINCT YEAR(date) as year,
-        MONTH(date) as month,
-        COUNT(*) as transaction_count
-    FROM transactions
-    GROUP BY YEAR(date), MONTH(date)
-    ORDER BY year DESC, month DESC
-    """
-    return execute_query(db_path, query)
+    df = read_parquet(data_dir, "transactions")
+    if df.is_empty() or "date" not in df.columns:
+        return pl.DataFrame()
+
+    return (
+        df.with_columns(
+            pl.col("date").dt.year().alias("year"),
+            pl.col("date").dt.month().alias("month"),
+        )
+        .group_by(["year", "month"])
+        .agg(pl.col("date").count().alias("transaction_count"))
+        .sort(["year", "month"], descending=[True, True])
+    )
 
 
 def get_transactions_for_period(
-    db_path: str,
+    data_dir: str,
     start_date: date,
     end_date: date,
     account_ids: Optional[list[int]] = None,
 ) -> pl.DataFrame:
-    """Get all transactions for a time period (pure function)."""
-    query = """
-    SELECT
-        t.*,
-        a.name as account_name
-    FROM transactions t
-    JOIN accounts a ON t.account_id = a.id
-    WHERE t.date BETWEEN $start_date AND $end_date
-    """
+    """Get all transactions for a time period with overrides merged."""
+    df = read_parquet(data_dir, "transactions")
+    if df.is_empty():
+        return pl.DataFrame()
 
-    params = {"start_date": start_date, "end_date": end_date}
+    overrides = read_overrides(data_dir)
+    df = merge_overrides(df, overrides)
+
+    # Filter by date range
+    df = df.filter(pl.col("date").is_between(start_date, end_date))
 
     if account_ids:
-        query += " AND t.account_id = ANY($account_ids)"
-        params["account_ids"] = account_ids
+        df = df.filter(pl.col("account_id").is_in(account_ids))
 
-    return execute_query(db_path, query, params)
+    # Join account names
+    accounts = read_yaml(data_dir, "accounts")
+    if accounts:
+        accounts_df = pl.DataFrame(accounts).select(
+            pl.col("id").alias("acc_id"),
+            pl.col("name").alias("account_name"),
+        )
+        df = df.join(accounts_df, left_on="account_id", right_on="acc_id", how="left")
+    else:
+        df = df.with_columns(pl.lit(None).cast(pl.Utf8).alias("account_name"))
+
+    return df
 
 
 def calculate_flow_by_category(df: pl.DataFrame) -> pl.DataFrame:
@@ -104,6 +116,10 @@ def prepare_sankey_data(df: pl.DataFrame) -> dict:
     """
     Prepare data for Sankey diagram (pure function).
 
+    Layout: Income Categories (left) → Accounts (center) → Expense Categories (right)
+    Uses prefixed internal keys to avoid collisions between accounts and categories
+    that share the same name.
+
     Returns dict with nodes and links for Plotly Sankey.
     """
     if df.is_empty():
@@ -119,72 +135,82 @@ def prepare_sankey_data(df: pl.DataFrame) -> dict:
     income_df = df.filter(pl.col("amount") > 0)
     expense_df = df.filter(pl.col("amount") < 0)
 
-    # Get unique accounts and categories
-    accounts = df["account_name"].unique().to_list()
-    categories = df["category"].unique().to_list()
+    # Collect unique income categories, accounts, and expense categories
+    income_categories = sorted(income_df["category"].unique().to_list()) if not income_df.is_empty() else []
+    expense_categories = sorted(expense_df["category"].unique().to_list()) if not expense_df.is_empty() else []
+    accounts = sorted(df["account_name"].unique().to_list())
 
-    # Create node list: accounts + categories
-    nodes = accounts + categories
-    node_dict = {name: idx for idx, name in enumerate(nodes)}
+    # Build node list with prefixed keys to avoid name collisions
+    # Order: income categories | accounts | expense categories (left to right)
+    node_keys: list[str] = []
+    node_labels: list[str] = []
+
+    for cat in income_categories:
+        node_keys.append(f"inc_{cat}")
+        node_labels.append(cat)
+
+    for acc in accounts:
+        node_keys.append(f"acc_{acc}")
+        node_labels.append(acc)
+
+    for cat in expense_categories:
+        node_keys.append(f"exp_{cat}")
+        node_labels.append(cat)
+
+    key_to_idx = {k: i for i, k in enumerate(node_keys)}
 
     # Create links
     links = []
 
-    # Income: categories -> accounts (source is category, target is account)
+    # Income: income category → account
     if not income_df.is_empty():
         income_flows = income_df.group_by(["account_name", "category"]).agg(
             pl.col("amount").sum().alias("total")
         )
-
         for row in income_flows.to_dicts():
-            if row["category"] and row["account_name"]:
+            src_key = f"inc_{row['category']}"
+            tgt_key = f"acc_{row['account_name']}"
+            if src_key in key_to_idx and tgt_key in key_to_idx:
                 links.append({
-                    "source": node_dict[row["category"]],
-                    "target": node_dict[row["account_name"]],
+                    "source": key_to_idx[src_key],
+                    "target": key_to_idx[tgt_key],
                     "value": abs(float(row["total"])),
                 })
 
-    # Expenses: accounts -> categories (source is account, target is category)
+    # Expenses: account → expense category
     if not expense_df.is_empty():
         expense_flows = expense_df.group_by(["account_name", "category"]).agg(
             pl.col("amount").sum().alias("total")
         )
-
         for row in expense_flows.to_dicts():
-            if row["category"] and row["account_name"]:
+            src_key = f"acc_{row['account_name']}"
+            tgt_key = f"exp_{row['category']}"
+            if src_key in key_to_idx and tgt_key in key_to_idx:
                 links.append({
-                    "source": node_dict[row["account_name"]],
-                    "target": node_dict[row["category"]],
+                    "source": key_to_idx[src_key],
+                    "target": key_to_idx[tgt_key],
                     "value": abs(float(row["total"])),
                 })
 
     return {
-        "nodes": [{"label": name} for name in nodes],
+        "nodes": [{"label": label} for label in node_labels],
         "links": links,
     }
 
 
 def calculate_spending_trend(
-    db_path: str,
+    data_dir: str,
     start_date: date,
     end_date: date,
     account_ids: Optional[list[int]] = None,
     frequency: str = "D",  # D=daily, W=weekly, M=monthly
 ) -> pl.DataFrame:
     """
-    Calculate spending trend over time (pure function).
+    Calculate spending trend over time.
 
-    Args:
-        db_path: Database path
-        start_date: Start date
-        end_date: End date
-        account_ids: Optional account filter
-        frequency: Aggregation frequency (D, W, M)
-
-    Returns:
-        DataFrame with date and income/expense columns
+    Returns DataFrame with date and income/expense columns.
     """
-    df = get_transactions_for_period(db_path, start_date, end_date, account_ids)
+    df = get_transactions_for_period(data_dir, start_date, end_date, account_ids)
 
     if df.is_empty():
         return pl.DataFrame()
@@ -207,7 +233,6 @@ def calculate_spending_trend(
 
     # Resample if needed (for weekly/monthly)
     if frequency == "W":
-        # Group by week
         daily = daily.with_columns(
             pl.col("date").dt.truncate("1w").alias("week")
         ).group_by("week").agg([
@@ -215,7 +240,6 @@ def calculate_spending_trend(
             pl.col("expense").sum(),
         ]).rename({"week": "date"}).sort("date")
     elif frequency == "M":
-        # Group by month
         daily = daily.with_columns(
             pl.col("date").dt.truncate("1mo").alias("month")
         ).group_by("month").agg([
@@ -227,23 +251,18 @@ def calculate_spending_trend(
 
 
 def get_top_spending_categories(
-    db_path: str,
+    data_dir: str,
     start_date: date,
     end_date: date,
     limit: int = 10,
     account_ids: Optional[list[int]] = None,
 ) -> pl.DataFrame:
-    """
-    Get top spending categories for a period (pure function).
-
-    Returns DataFrame with category and total spending (expenses only).
-    """
-    df = get_transactions_for_period(db_path, start_date, end_date, account_ids)
+    """Get top spending categories for a period (expenses only)."""
+    df = get_transactions_for_period(data_dir, start_date, end_date, account_ids)
 
     if df.is_empty():
         return pl.DataFrame()
 
-    # Filter to expenses only (negative amounts) and categorized
     expenses = df.filter(
         (pl.col("amount") < 0) & (pl.col("category").is_not_null())
     )
@@ -251,7 +270,6 @@ def get_top_spending_categories(
     if expenses.is_empty():
         return pl.DataFrame()
 
-    # Group by category and sum
     top_categories = (
         expenses.group_by("category")
         .agg([
@@ -265,25 +283,16 @@ def get_top_spending_categories(
     return top_categories
 
 
-def get_monthly_summary(db_path: str, year: int, month: int) -> dict:
-    """
-    Get comprehensive monthly summary (pure function).
-
-    Returns dict with income, expenses, net, and category breakdown.
-    """
-    from datetime import datetime
-
-    # Calculate month start and end
+def get_monthly_summary(data_dir: str, year: int, month: int) -> dict:
+    """Get comprehensive monthly summary."""
     start_date = date(year, month, 1)
     if month == 12:
         end_date = date(year + 1, 1, 1)
     else:
         end_date = date(year, month + 1, 1)
 
-    # Get transactions
-    df = get_transactions_for_period(db_path, start_date, end_date)
+    df = get_transactions_for_period(data_dir, start_date, end_date)
 
-    # Calculate summary
     income_expense = calculate_income_expense(df)
     category_flow = calculate_flow_by_category(df)
 

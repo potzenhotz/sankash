@@ -4,11 +4,17 @@ from datetime import date
 
 import pytest
 
-from sankash.core.models import Rule, RuleAction, RuleCondition, Transaction
-from sankash.services import rule_service, transaction_service
+from sankash.core.models import Account, Rule, RuleAction, RuleCondition, Transaction
+from sankash.services import account_service, rule_service, transaction_service
 
 
-def test_create_and_get_rule(test_db_path: str) -> None:
+def _create_test_account(data_dir: str) -> int:
+    """Helper to create a test account."""
+    account = Account(name="Test", bank="Bank")
+    return account_service.create_account(data_dir, account)
+
+
+def test_create_and_get_rule(test_data_dir: str) -> None:
     """Test creating and retrieving a rule."""
     rule = Rule(
         name="Grocery Rule",
@@ -21,16 +27,16 @@ def test_create_and_get_rule(test_db_path: str) -> None:
         ]
     )
 
-    rule_id = rule_service.create_rule(test_db_path, rule)
+    rule_id = rule_service.create_rule(test_data_dir, rule)
     assert rule_id == 1
 
     # Get rules
-    df = rule_service.get_rules(test_db_path)
+    df = rule_service.get_rules(test_data_dir)
     assert len(df) == 1
     assert df["name"][0] == "Grocery Rule"
 
 
-def test_evaluate_rule_contains(test_db_path: str) -> None:
+def test_evaluate_rule_contains(test_data_dir: str) -> None:
     """Test rule evaluation with contains operator."""
     rule = Rule(
         name="Test",
@@ -61,7 +67,7 @@ def test_evaluate_rule_contains(test_db_path: str) -> None:
     assert rule_service.evaluate_rule(rule, transaction2) is False
 
 
-def test_evaluate_rule_amount(test_db_path: str) -> None:
+def test_evaluate_rule_amount(test_data_dir: str) -> None:
     """Test rule evaluation with amount comparison."""
     rule = Rule(
         name="Large Expense",
@@ -92,15 +98,9 @@ def test_evaluate_rule_amount(test_db_path: str) -> None:
     assert rule_service.evaluate_rule(rule, transaction2) is False
 
 
-def test_apply_rules_to_uncategorized(test_db_path: str) -> None:
+def test_apply_rules_to_uncategorized(test_data_dir: str) -> None:
     """Test applying rules to uncategorized transactions."""
-    from sankash.core.database import execute_command
-
-    # Setup account
-    execute_command(
-        test_db_path,
-        "INSERT INTO accounts (name, bank, account_number) VALUES ('Test', 'Bank', '123')"
-    )
+    _create_test_account(test_data_dir)
 
     # Create rule
     rule = Rule(
@@ -113,7 +113,7 @@ def test_apply_rules_to_uncategorized(test_db_path: str) -> None:
             RuleAction(action_type="set_category", value="Groceries")
         ]
     )
-    rule_service.create_rule(test_db_path, rule)
+    rule_service.create_rule(test_data_dir, rule)
 
     # Create matching transaction
     transaction = Transaction(
@@ -122,45 +122,45 @@ def test_apply_rules_to_uncategorized(test_db_path: str) -> None:
         payee="Whole Foods Grocery",
         amount=-50.0,
     )
-    transaction_service.create_transaction(test_db_path, transaction)
+    transaction_service.create_transaction(test_data_dir, transaction)
 
     # Apply rules
-    categorized = rule_service.apply_rules_to_uncategorized(test_db_path)
+    categorized = rule_service.apply_rules_to_uncategorized(test_data_dir)
     assert categorized == 1
 
     # Verify transaction was categorized
-    df = transaction_service.get_transactions(test_db_path)
+    df, _ = transaction_service.get_transactions(test_data_dir)
     assert df["category"][0] == "Groceries"
     assert df["is_categorized"][0] is True
 
 
-def test_create_rule_from_transaction(test_db_path: str) -> None:
-    """Test creating a rule from a transaction."""
-    transaction = Transaction(
-        id=1,
-        account_id=1,
-        date=date(2024, 1, 1),
-        payee="Netflix",
-        amount=-15.99,
-        category="Entertainment",
-    )
-
-    rule_id = rule_service.create_rule_from_transaction(
-        test_db_path,
-        transaction,
-        "Netflix Auto-categorize"
-    )
+def test_add_condition_to_category(test_data_dir: str) -> None:
+    """Test adding a condition to a category's rule."""
+    condition = RuleCondition(field="payee", operator="contains", value="Netflix")
+    rule_service.add_condition_to_category(test_data_dir, "Entertainment", condition)
 
     # Verify rule was created
-    df = rule_service.get_rules(test_db_path)
+    df = rule_service.get_rules(test_data_dir)
     assert len(df) == 1
-    assert df["name"][0] == "Netflix Auto-categorize"
 
-    # Parse and verify rule structure
     rule = rule_service.parse_rule_from_row(df.to_dicts()[0])
+    assert rule.name == "Entertainment"
     assert len(rule.conditions) == 1
-    assert rule.conditions[0].field == "payee"
     assert rule.conditions[0].value == "Netflix"
-    assert len(rule.actions) == 1
-    assert rule.actions[0].action_type == "set_category"
     assert rule.actions[0].value == "Entertainment"
+
+    # Add another condition to the same category
+    condition2 = RuleCondition(field="payee", operator="contains", value="Disney")
+    rule_service.add_condition_to_category(test_data_dir, "Entertainment", condition2)
+
+    df = rule_service.get_rules(test_data_dir)
+    assert len(df) == 1  # Still one rule
+
+    rule = rule_service.parse_rule_from_row(df.to_dicts()[0])
+    assert len(rule.conditions) == 2
+
+    # Adding duplicate condition should be a no-op
+    rule_service.add_condition_to_category(test_data_dir, "Entertainment", condition)
+    df = rule_service.get_rules(test_data_dir)
+    rule = rule_service.parse_rule_from_row(df.to_dicts()[0])
+    assert len(rule.conditions) == 2

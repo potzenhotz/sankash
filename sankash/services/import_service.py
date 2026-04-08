@@ -2,7 +2,7 @@
 
 import hashlib
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -10,7 +10,13 @@ import polars as pl
 
 from sankash.converters.bank_converters import BankFormat, get_converter
 from sankash.core.models import ImportHistory, Transaction
-from sankash.services.transaction_service import create_transaction, get_transactions
+from sankash.core.storage import (
+    append_parquet,
+    next_id,
+    read_json,
+    read_parquet,
+    write_json,
+)
 from sankash.services.import_history_service import (
     calculate_file_hash,
     check_duplicate_file,
@@ -154,7 +160,7 @@ def filter_duplicate_transactions(
 
 
 def import_transactions(
-    db_path: str,
+    data_dir: str,
     file_path: str | Path,
     account_id: int,
     bank_format: BankFormat = BankFormat.STANDARD,
@@ -162,13 +168,6 @@ def import_transactions(
 ) -> dict[str, int]:
     """
     Import transactions from CSV file.
-
-    Args:
-        db_path: Database path
-        file_path: Path to CSV file
-        account_id: Account to import into
-        bank_format: Bank format for conversion (default: STANDARD)
-        original_filename: Original filename before temp storage
 
     Returns:
         Dictionary with import statistics including import_session_id
@@ -190,7 +189,8 @@ def import_transactions(
     import_df = transform_import_dataframe(import_df, account_id)
 
     # Get existing transactions for duplicate detection
-    existing_df, _ = get_transactions(db_path, account_id=account_id, limit=100_000, offset=0)
+    from sankash.services.transaction_service import get_transactions
+    existing_df, _ = get_transactions(data_dir, account_id=account_id, limit=100_000, offset=0)
 
     # Filter duplicates
     new_transactions, duplicates = filter_duplicate_transactions(import_df, existing_df)
@@ -203,14 +203,15 @@ def import_transactions(
         total_count=len(import_df),
         imported_count=len(new_transactions),
         duplicate_count=len(duplicates),
-        categorized_count=0,  # Will be updated after applying rules
+        categorized_count=0,
         file_hash=file_hash,
     )
 
-    import_session_id = create_import_history(db_path, import_history)
+    import_session_id = create_import_history(data_dir, import_history)
 
-    # Bulk insert all new transactions using a single connection
-    import duckdb
+    # Prepare new transactions for insertion
+    existing_txns = read_parquet(data_dir, "transactions")
+    start_id = next_id(existing_txns)
 
     insert_df = new_transactions.select([
         pl.col("account_id"),
@@ -219,29 +220,33 @@ def import_transactions(
         pl.col("notes").fill_null(""),
         pl.col("amount"),
         pl.col("imported_id"),
+    ]).with_columns(
+        (pl.arange(0, pl.count()) + start_id).alias("id"),
         pl.lit(import_session_id).alias("import_session_id"),
-    ])
-
-    con = duckdb.connect(db_path)
-    con.execute(
-        """INSERT INTO transactions
-        (account_id, date, payee, notes, amount, imported_id, import_session_id)
-        SELECT * FROM insert_df""",
+        pl.lit(None).cast(pl.Utf8).alias("category"),
+        pl.lit(False).alias("is_categorized"),
+        pl.lit(False).alias("is_transfer"),
+        pl.lit(None).cast(pl.Int64).alias("transfer_account_id"),
+        pl.lit(datetime.now().isoformat()).alias("created_at"),
     )
+
     imported_count = len(insert_df)
-    con.close()
+
+    if imported_count > 0:
+        append_parquet(data_dir, "transactions", insert_df)
 
     # Apply rules to newly imported transactions
     from sankash.services.rule_service import apply_rules_to_uncategorized
-    categorized_count = apply_rules_to_uncategorized(db_path)
+    categorized_count = apply_rules_to_uncategorized(data_dir)
 
     # Update import history with categorized count
-    con = duckdb.connect(db_path)
-    con.execute(
-        "UPDATE import_history SET categorized_count = ? WHERE id = ?",
-        [categorized_count, import_session_id],
-    )
-    con.close()
+    records = read_json(data_dir, "import_history")
+    if isinstance(records, list):
+        for rec in records:
+            if rec.get("id") == import_session_id:
+                rec["categorized_count"] = categorized_count
+                break
+        write_json(data_dir, "import_history", records)
 
     return {
         "total": len(import_df),
@@ -274,7 +279,6 @@ def preview_import(
             try:
                 import_df = converter(file_path)
             except Exception as e:
-                # Read first few lines for diagnostics
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                         first_lines = [f.readline() for _ in range(3)]
@@ -292,7 +296,6 @@ def preview_import(
             try:
                 import_df = parse_csv_to_dataframe(file_path)
             except Exception as e:
-                # Read first few lines for diagnostics
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                         first_lines = [f.readline() for _ in range(3)]

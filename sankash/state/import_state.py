@@ -88,7 +88,7 @@ class ImportState(BaseState):
     def load_accounts(self) -> None:
         """Load available accounts."""
         try:
-            df = account_service.get_accounts(self.db_path)
+            df = account_service.get_accounts(self.data_dir)
             self.accounts = df.to_dicts()
         except Exception as e:
             self.error = f"Failed to load accounts: {str(e)}"
@@ -96,7 +96,7 @@ class ImportState(BaseState):
     def load_import_history(self) -> None:
         """Load import history."""
         try:
-            df = get_import_history(self.db_path, limit=20)
+            df = get_import_history(self.data_dir, limit=20)
             self.import_history = df.to_dicts()
             self.show_history = len(self.import_history) > 0
         except Exception as e:
@@ -159,7 +159,7 @@ class ImportState(BaseState):
 
         try:
             stats = import_service.import_transactions(
-                self.db_path,
+                self.data_dir,
                 self.uploaded_file,
                 self.selected_account_id,
                 bank_format=BankFormat(self.bank_format),

@@ -30,10 +30,13 @@ wheels/
 .web/
 assets/
 
-# Database
+# Database (legacy)
 *.db
 *.duckdb
 *.duckdb.wal
+
+# Data directory
+data/
 
 # Config
 config/settings.yaml

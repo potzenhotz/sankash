@@ -19,7 +19,6 @@ class AccountState(BaseState):
     # Form fields
     form_name: str = ""
     form_bank: str = ""
-    form_account_number: str = ""
     form_currency: str = "EUR"
     form_is_active: bool = True
 
@@ -32,7 +31,7 @@ class AccountState(BaseState):
         self.error = ""
 
         try:
-            df = account_service.get_accounts_with_balances(self.db_path)
+            df = account_service.get_accounts_with_balances(self.data_dir)
             self.accounts = df.to_dicts()
         except Exception as e:
             self.error = f"Failed to load accounts: {str(e)}"
@@ -41,19 +40,18 @@ class AccountState(BaseState):
 
     def create_account(self) -> None:
         """Create new account from form data."""
-        if not self.form_name or not self.form_bank or not self.form_account_number:
-            self.error = "Name, bank, and account number are required"
+        if not self.form_name:
+            self.error = "Account name is required"
             return
 
         try:
             account = Account(
                 name=self.form_name,
                 bank=self.form_bank,
-                account_number=self.form_account_number,
                 currency=self.form_currency,
                 is_active=self.form_is_active,
             )
-            account_service.create_account(self.db_path, account)
+            account_service.create_account(self.data_dir, account)
             self.clear_form()
             self.load_accounts()
         except Exception as e:
@@ -62,7 +60,7 @@ class AccountState(BaseState):
     def deactivate_account(self, account_id: int) -> None:
         """Deactivate an account."""
         try:
-            account_service.deactivate_account(self.db_path, account_id)
+            account_service.deactivate_account(self.data_dir, account_id)
             self.load_accounts()
         except Exception as e:
             self.error = f"Failed to deactivate account: {str(e)}"
@@ -71,7 +69,6 @@ class AccountState(BaseState):
         """Clear form fields."""
         self.form_name = ""
         self.form_bank = ""
-        self.form_account_number = ""
         self.form_currency = "EUR"
         self.form_is_active = True
         self.editing_id = None

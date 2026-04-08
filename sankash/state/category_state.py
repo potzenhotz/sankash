@@ -60,7 +60,7 @@ class CategoryState(BaseState):
 
         try:
             # Load all categories
-            df = category_service.get_categories(self.db_path)
+            df = category_service.get_categories(self.data_dir)
             categories = df.to_dicts()
             logger.info(f"Loaded {len(categories)} categories")
 
@@ -82,7 +82,7 @@ class CategoryState(BaseState):
             self.categories = categories
 
             # Build hierarchy
-            self.hierarchy = category_service.get_category_hierarchy(self.db_path)
+            self.hierarchy = category_service.get_category_hierarchy(self.data_dir)
             logger.info(f"Built hierarchy with {len(self.hierarchy)} parent categories")
         except Exception as e:
             self.error = f"Failed to load categories: {str(e)}"
@@ -110,7 +110,7 @@ class CategoryState(BaseState):
 
             # If this is a subcategory, inherit parent's color
             if parent:
-                color = category_service.get_parent_color(self.db_path, parent)
+                color = category_service.get_parent_color(self.data_dir, parent)
                 logger.info(f"Subcategory inheriting color from parent '{parent}': {color}")
             else:
                 color = self.form_color
@@ -125,13 +125,13 @@ class CategoryState(BaseState):
             if self.editing_id:
                 # Update existing
                 logger.info(f"Updating category ID {self.editing_id}")
-                category_service.update_category(self.db_path, self.editing_id, category)
+                category_service.update_category(self.data_dir, self.editing_id, category)
                 self.success = f"Category '{self.form_name}' updated successfully"
                 logger.info(f"Category updated successfully")
             else:
                 # Create new
                 logger.info(f"Creating new category: {category}")
-                new_id = category_service.create_category(self.db_path, category)
+                new_id = category_service.create_category(self.data_dir, category)
                 self.success = f"Category '{self.form_name}' created successfully"
                 logger.info(f"Category created successfully with ID {new_id}")
 
@@ -163,7 +163,7 @@ class CategoryState(BaseState):
 
         try:
             # Get parent's color
-            color = category_service.get_parent_color(self.db_path, self.adding_subcategory_to)
+            color = category_service.get_parent_color(self.data_dir, self.adding_subcategory_to)
 
             category = Category(
                 name=self.inline_subcategory_name,
@@ -171,7 +171,7 @@ class CategoryState(BaseState):
                 color=color,
             )
 
-            new_id = category_service.create_category(self.db_path, category)
+            new_id = category_service.create_category(self.data_dir, category)
             self.success = f"Subcategory '{self.inline_subcategory_name}' created successfully"
             logger.info(f"Inline subcategory created with ID {new_id}")
 
@@ -225,7 +225,7 @@ class CategoryState(BaseState):
             )
             category_name = category["name"] if category else "Category"
 
-            category_service.delete_category(self.db_path, self.confirm_delete_id)
+            category_service.delete_category(self.data_dir, self.confirm_delete_id)
             self.success = f"'{category_name}' deleted successfully"
             self.confirm_delete_id = None
             self.load_categories()
@@ -277,7 +277,7 @@ class CategoryState(BaseState):
         self.success = ""
 
         try:
-            category_service.delete_all_categories(self.db_path)
+            category_service.delete_all_categories(self.data_dir)
             self.close_delete_all_dialog()
             self.load_categories()
             self.success = "All categories deleted"
@@ -294,7 +294,7 @@ class CategoryState(BaseState):
         self.success = ""
 
         try:
-            added, skipped = category_service.seed_default_categories_german(self.db_path)
+            added, skipped = category_service.seed_default_categories_german(self.data_dir)
             self.load_categories()
             if added == 0:
                 self.success = f"All default categories already exist ({skipped} skipped)"

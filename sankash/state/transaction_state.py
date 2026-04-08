@@ -100,7 +100,7 @@ class TransactionState(BaseState):
 
             # Get paginated transactions (search, sort, pagination all in SQL)
             df, total_count = transaction_service.get_transactions(
-                self.db_path,
+                self.data_dir,
                 account_id=self.filter_account_id,
                 start_date=start_date,
                 end_date=end_date,
@@ -134,7 +134,7 @@ class TransactionState(BaseState):
     def load_categories(self) -> None:
         """Load available categories with hierarchical display names."""
         try:
-            df = category_service.get_categories(self.db_path)
+            df = category_service.get_categories(self.data_dir)
             categories = df.to_dicts()
 
             # Build display names and both forward/reverse mappings in one pass
@@ -186,7 +186,7 @@ class TransactionState(BaseState):
             actual_category = self.category_display_map.get(category, category)
 
             transaction_service.update_transaction_category(
-                self.db_path,
+                self.data_dir,
                 transaction_id,
                 actual_category,
             )
@@ -207,7 +207,7 @@ class TransactionState(BaseState):
             )
 
             transaction_service.bulk_update_categories(
-                self.db_path,
+                self.data_dir,
                 self.selected_ids,
                 actual_category,
             )
@@ -287,7 +287,7 @@ class TransactionState(BaseState):
         self.loading = True
         self.error = ""
         try:
-            count = rule_service.apply_rules_to_uncategorized(self.db_path)
+            count = rule_service.apply_rules_to_uncategorized(self.data_dir)
             self.load_transactions()
             if count == 0:
                 self.error = "No transactions matched any rules"
@@ -417,8 +417,8 @@ class TransactionState(BaseState):
                 ],
             )
 
-            rule_service.create_rule(self.db_path, rule)
-            rule_service.apply_rules_to_uncategorized(self.db_path)
+            rule_service.create_rule(self.data_dir, rule)
+            rule_service.apply_rules_to_uncategorized(self.data_dir)
             self.close_rule_dialog()
             self.load_transactions()
         except Exception as e:
@@ -435,10 +435,10 @@ class TransactionState(BaseState):
         try:
             # Read Ollama config from DB settings
             base_url = settings_service.get_setting(
-                self.db_path, "ollama_base_url", "http://localhost:11434"
+                self.data_dir, "ollama_base_url", "http://localhost:11434"
             )
             model = settings_service.get_setting(
-                self.db_path, "ollama_model", "llama3.2"
+                self.data_dir, "ollama_model", "llama3.2"
             )
 
             if not llm_service.check_ollama_available(base_url):
@@ -547,9 +547,9 @@ class TransactionState(BaseState):
                         )
                     ],
                 )
-                rule_service.create_rule(self.db_path, rule)
+                rule_service.create_rule(self.data_dir, rule)
 
-            rule_service.apply_rules_to_uncategorized(self.db_path)
+            rule_service.apply_rules_to_uncategorized(self.data_dir)
             self.dismiss_suggestions()
             self.load_transactions()
         except Exception as e:
@@ -589,7 +589,7 @@ class TransactionState(BaseState):
         self.error = ""
 
         try:
-            transaction_service.delete_all_transactions(self.db_path)
+            transaction_service.delete_all_transactions(self.data_dir)
             self.close_delete_all_dialog()
             self.load_transactions()
         except Exception as e:
