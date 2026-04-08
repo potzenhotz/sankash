@@ -96,7 +96,7 @@ def ollama_settings_card() -> rx.Component:
                 SettingsState.error != "",
                 rx.callout(
                     SettingsState.error,
-                    icon="alert-triangle",
+                    icon="triangle-alert",
                     color_scheme="red",
                     size="1",
                 ),

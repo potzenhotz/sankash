@@ -474,7 +474,7 @@ def transaction_row(transaction: dict) -> rx.Component:
         rx.table.cell(
             rx.tooltip(
                 rx.button(
-                    rx.icon("wand-2", size=16),
+                    rx.icon("wand-sparkles", size=16),
                     on_click=lambda: TransactionState.open_rule_dialog(transaction["id"]),
                     size="1",
                     variant="ghost",

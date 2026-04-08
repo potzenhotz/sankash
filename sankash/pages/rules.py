@@ -111,7 +111,6 @@ def category_rule_row(cat_rule: dict) -> rx.Component:
                     rx.text(cat_rule["condition_text"], size="2"),
                     rx.text("No conditions", size="2", color="gray"),
                 ),
-                max_width="400px",
             ),
             rx.table.cell(
                 rx.cond(
@@ -260,21 +259,16 @@ def uncategorized_row(tx: dict) -> rx.Component:
     is_assigning = RuleState.assigning_tx_payee == tx["payee"]
 
     return rx.table.row(
-        rx.table.cell(rx.text(tx["date"], size="1")),
+        rx.table.cell(rx.text(tx["date"], size="1"), white_space="nowrap"),
         rx.table.cell(
-            rx.tooltip(
-                rx.text(tx["payee"], size="2", truncate=True, max_width="180px"),
-                content=tx["payee"],
-            ),
+            rx.text(tx["payee"], size="2"),
         ),
-        rx.table.cell(rx.text(tx["amount"], size="2")),
+        rx.table.cell(rx.text(tx["amount"], size="2"), white_space="nowrap"),
         rx.table.cell(
             rx.text(
                 tx["notes"],
                 size="1",
                 color="gray",
-                white_space="normal",
-                word_break="break-word",
             ),
         ),
         rx.table.cell(
@@ -338,8 +332,9 @@ def uncategorized_panel() -> rx.Component:
                             rx.foreach(RuleState.uncategorized_transactions, uncategorized_row),
                         ),
                         size="1",
+                        width="100%",
                     ),
-                    max_height="300px",
+                    max_height="400px",
                     overflow_y="auto",
                     width="100%",
                 ),
@@ -347,7 +342,6 @@ def uncategorized_panel() -> rx.Component:
             spacing="3",
             width="100%",
         ),
-        height="100%",
     )
 
 
