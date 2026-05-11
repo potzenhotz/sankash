@@ -297,13 +297,16 @@ def inline_rule_editor() -> rx.Component:
                         size="1",
                     ),
                 ),
-                # Category combobox — typing filters via native HTML datalist
+                # Category combobox — typing filters via native HTML datalist.
+                # The datalist popup matches the input's width, so the input is
+                # widened to fit long category display names like
+                # "Lebensmittel & Drogerie › Supermarkt".
                 rx.input(
                     value=RuleState.ai_suggested_category,
                     on_change=RuleState.update_ai_suggested_category,
                     placeholder="Category (type to filter)",
                     size="1",
-                    width="200px",
+                    width="360px",
                     custom_attrs={"list": "ai_category_options"},
                 ),
                 rx.el.datalist(
