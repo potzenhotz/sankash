@@ -457,12 +457,21 @@ class RuleState(BaseState):
                 self.ai_loading = False
                 return
 
-            # Find notes for this payee
+            # Find notes for the specific transaction being suggested.
+            # Match by tx_id first (the row the user clicked); fall back to payee
+            # match only if no tx_id was provided, otherwise duplicate-payee rows
+            # would all be sent the first row's notes.
             notes_sample = ""
-            for tx in self.uncategorized_transactions:
-                if tx.get("payee") == payee:
-                    notes_sample = tx.get("notes", "") or ""
-                    break
+            if tx_id:
+                for tx in self.uncategorized_transactions:
+                    if str(tx.get("id")) == str(tx_id):
+                        notes_sample = tx.get("notes", "") or ""
+                        break
+            else:
+                for tx in self.uncategorized_transactions:
+                    if tx.get("payee") == payee:
+                        notes_sample = tx.get("notes", "") or ""
+                        break
 
             actual_categories = list(self.category_display_map.values())
 
