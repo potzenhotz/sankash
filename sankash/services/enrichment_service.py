@@ -388,6 +388,16 @@ def enrich_with_amazon(
         new_ids = split_transaction(data_dir, parent_id, child_splits)
         total_children += len(new_ids)
 
+    # After enrichment, re-run rules so newly created split children and rows
+    # with enriched notes get categorized by any existing notes-based rules.
+    categorized = 0
+    if note_updates or splits_to_apply:
+        try:
+            from sankash.services.rule_service import apply_rules_to_uncategorized
+            categorized = apply_rules_to_uncategorized(data_dir)
+        except Exception:
+            categorized = 0
+
     stats = {
         "matched": len(note_updates) + len(splits_to_apply),
         "skipped": skipped,
@@ -396,6 +406,7 @@ def enrich_with_amazon(
         "partial_shipment": partial_shipment,
         "multi_item_match": multi_item_match,
         "unreconciled": unreconciled,
+        "categorized": categorized,
         "total_amazon": len(amazon_df),
     }
     _record_enrichment_history(data_dir, file_path, "amazon", stats)
@@ -539,9 +550,20 @@ def enrich_with_paypal(
 
         write_parquet(data_dir, "transactions", txn_df)
 
+    # After enrichment, re-run rules so notes-based rules can categorize the
+    # rows that just gained merchant names.
+    categorized = 0
+    if updates:
+        try:
+            from sankash.services.rule_service import apply_rules_to_uncategorized
+            categorized = apply_rules_to_uncategorized(data_dir)
+        except Exception:
+            categorized = 0
+
     stats = {
         "matched": len(updates),
         "skipped": skipped,
+        "categorized": categorized,
         "total_paypal": len(paypal_df),
     }
     _record_enrichment_history(data_dir, file_path, "paypal", stats)
