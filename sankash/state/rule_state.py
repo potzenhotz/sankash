@@ -36,6 +36,7 @@ class RuleState(BaseState):
 
     # Per-transaction AI / manual rule creation state
     ai_suggesting_payee: str = ""        # which payee is currently loading/showing
+    ai_suggesting_tx_id: str = ""        # which specific transaction row is open
     ai_suggesting_provider: str = ""     # "apfel" or "openrouter"
     ai_loading: bool = False
     ai_error: str = ""
@@ -311,10 +312,11 @@ class RuleState(BaseState):
 
     # --- Manual rule creation from uncategorized panel ---
 
-    def start_manual_rule(self, payee: str) -> None:
+    def start_manual_rule(self, payee: str, tx_id: str = "") -> None:
         """Open inline rule editor for a transaction, pre-filled with its payee."""
         self._clear_ai_state()
         self.ai_suggesting_payee = payee
+        self.ai_suggesting_tx_id = tx_id
         self.ai_suggesting_provider = "manual"
         self.ai_match_field = "payee"
         self.ai_match_value = payee
@@ -433,10 +435,11 @@ class RuleState(BaseState):
                 settings_service.get_setting(self.data_dir, "openai_api_key", "") or None,
             )
 
-    def request_ai_suggestion(self, payee: str, provider: str):
+    def request_ai_suggestion(self, payee: str, provider: str, tx_id: str = ""):
         """Request AI category suggestion for a single transaction."""
         self._clear_ai_state()
         self.ai_suggesting_payee = payee
+        self.ai_suggesting_tx_id = tx_id
         self.ai_suggesting_provider = provider
         self.ai_loading = True
         self.ai_error = ""
@@ -560,6 +563,7 @@ class RuleState(BaseState):
     def _clear_ai_state(self) -> None:
         """Reset all per-transaction AI state."""
         self.ai_suggesting_payee = ""
+        self.ai_suggesting_tx_id = ""
         self.ai_suggesting_provider = ""
         self.ai_loading = False
         self.ai_error = ""

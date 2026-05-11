@@ -24,8 +24,25 @@ def _load_transactions(data_dir: str) -> pl.DataFrame:
     df = read_parquet(data_dir, "transactions")
     if df.is_empty():
         return df
+    # Backfill parent_id column for old data
+    if "parent_id" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("parent_id"))
     overrides = read_overrides(data_dir)
     return merge_overrides(df, overrides)
+
+
+def _parent_ids_with_children(df: pl.DataFrame) -> set[int]:
+    """Return the set of transaction ids that have at least one split child."""
+    if df.is_empty() or "parent_id" not in df.columns:
+        return set()
+    parents = (
+        df.filter(pl.col("parent_id").is_not_null())
+        .select("parent_id")
+        .unique()
+        .to_series()
+        .to_list()
+    )
+    return {int(p) for p in parents if p is not None}
 
 
 def get_transactions(
@@ -42,8 +59,21 @@ def get_transactions(
     sort_order: str = "desc",
     limit: int = 50,
     offset: int = 0,
+    include_split_parents: bool = False,
+    parent_id: Optional[int] = None,
 ) -> tuple[pl.DataFrame, int]:
     """Get transactions with optional filters, search, sort, and pagination.
+
+    By default returns "leaf" rows only:
+      - children of split orders (parent_id is not null), AND
+      - standalone transactions (no children),
+    excluding split parents (which would double-count totals).
+
+    Args:
+        include_split_parents: when True, parent rows are also returned (useful for the
+            transactions table where we render parents collapsed with an expand chevron).
+        parent_id: when provided, return only the children of that parent; ignores the
+            leaf filter so the caller can fetch a parent's child rows.
 
     Returns tuple of (Polars DataFrame, total_count) for paginated results.
     Includes import source information from import_history.
@@ -51,6 +81,13 @@ def get_transactions(
     df = _load_transactions(data_dir)
     if df.is_empty():
         return pl.DataFrame(), 0
+
+    if parent_id is not None:
+        df = df.filter(pl.col("parent_id") == parent_id)
+    elif not include_split_parents:
+        parent_ids = _parent_ids_with_children(df)
+        if parent_ids:
+            df = df.filter(~pl.col("id").is_in(list(parent_ids)))
 
     # Apply filters
     if account_id is not None:
@@ -107,10 +144,13 @@ def get_transactions(
 
 
 def get_uncategorized_count(data_dir: str) -> int:
-    """Get count of uncategorized transactions."""
+    """Get count of uncategorized transactions (leaves only, excludes split parents)."""
     df = _load_transactions(data_dir)
     if df.is_empty():
         return 0
+    parent_ids = _parent_ids_with_children(df)
+    if parent_ids:
+        df = df.filter(~pl.col("id").is_in(list(parent_ids)))
     return len(df.filter(pl.col("is_categorized") == False))  # noqa: E712
 
 
@@ -180,11 +220,66 @@ def create_transaction(data_dir: str, transaction: Transaction) -> int:
         "transfer_account_id": transaction.transfer_account_id,
         "imported_id": transaction.imported_id,
         "import_session_id": transaction.import_session_id,
+        "parent_id": transaction.parent_id,
         "created_at": datetime.now().isoformat(),
     }])
 
     append_parquet(data_dir, "transactions", new_row)
     return new_id
+
+
+def split_transaction(
+    data_dir: str,
+    parent_id: int,
+    splits: list[dict],
+) -> list[int]:
+    """Split a transaction into multiple child rows.
+
+    Children inherit account_id, date, payee, and import_session_id from the parent.
+    Each split dict contains 'notes' (str) and 'amount' (float, signed like parent).
+
+    The parent row is left intact (preserving the original total for audit) but is
+    excluded from leaf queries by virtue of having children.
+
+    Returns the list of new child ids.
+    """
+    df = read_parquet(data_dir, "transactions")
+    if df.is_empty():
+        return []
+    if "parent_id" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("parent_id"))
+
+    parent_rows = df.filter(pl.col("id") == parent_id)
+    if parent_rows.is_empty():
+        return []
+    parent = parent_rows.row(0, named=True)
+
+    new_ids: list[int] = []
+    next_child_id = next_id(df)
+    new_rows: list[dict] = []
+    for split in splits:
+        new_rows.append({
+            "id": next_child_id,
+            "account_id": parent["account_id"],
+            "date": parent["date"],
+            "payee": parent["payee"],
+            "notes": split.get("notes", ""),
+            "amount": float(split["amount"]),
+            "category": None,
+            "is_categorized": False,
+            "is_transfer": False,
+            "transfer_account_id": None,
+            "imported_id": None,
+            "import_session_id": parent.get("import_session_id"),
+            "parent_id": parent_id,
+            "created_at": datetime.now().isoformat(),
+        })
+        new_ids.append(next_child_id)
+        next_child_id += 1
+
+    if new_rows:
+        append_parquet(data_dir, "transactions", pl.DataFrame(new_rows))
+    return new_ids
 
 
 def update_transaction(

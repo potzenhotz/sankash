@@ -22,7 +22,7 @@ class ImportState(BaseState):
     selected_account_id: int = 0
     uploaded_file: str = ""
     original_filename: str = ""
-    bank_format: str = BankFormat.STANDARD.value
+    bank_format: str = BankFormat.DEUTSCHE_BANK.value
 
     # Preview
     preview_data: list[dict] = []
@@ -44,17 +44,16 @@ class ImportState(BaseState):
     @rx.var
     def bank_format_options(self) -> list[str]:
         """Get bank format options for select."""
-        return ["Standard CSV", "Deutsche Bank", "ING"]
+        return ["Deutsche Bank", "ING"]
 
     @rx.var
     def selected_bank_format_display(self) -> str:
         """Get display name for selected bank format."""
         format_map = {
-            BankFormat.STANDARD.value: "Standard CSV",
             BankFormat.DEUTSCHE_BANK.value: "Deutsche Bank",
             BankFormat.ING.value: "ING",
         }
-        return format_map.get(self.bank_format, "Standard CSV")
+        return format_map.get(self.bank_format, "Deutsche Bank")
 
     def handle_account_selection(self, value: str) -> None:
         """Handle account selection from dropdown."""
@@ -68,11 +67,10 @@ class ImportState(BaseState):
         """Handle bank format selection from dropdown."""
         # Map display name to enum value
         format_map = {
-            "Standard CSV": BankFormat.STANDARD.value,
             "Deutsche Bank": BankFormat.DEUTSCHE_BANK.value,
             "ING": BankFormat.ING.value,
         }
-        self.bank_format = format_map.get(value, BankFormat.STANDARD.value)
+        self.bank_format = format_map.get(value, BankFormat.DEUTSCHE_BANK.value)
 
     def reset_ui(self) -> None:
         """Reset transient UI state on page load."""

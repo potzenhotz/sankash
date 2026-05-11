@@ -6,8 +6,11 @@ Supports multiple providers:
 """
 
 import json
+import logging
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Provider: Ollama
@@ -70,6 +73,9 @@ def _suggest_via_openai(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    # OpenRouter recommends these for attribution; harmless for other providers.
+    headers.setdefault("HTTP-Referer", "https://github.com/lukasmussle/sankash")
+    headers.setdefault("X-Title", "Sankash")
 
     resp = httpx.post(
         f"{base_url}/v1/chat/completions",
@@ -81,8 +87,26 @@ def _suggest_via_openai(
         },
         timeout=120,
     )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    if resp.status_code >= 400:
+        # Surface the provider's error body — OpenRouter / OpenAI return useful
+        # JSON like {"error": {"message": "..."}} that raise_for_status hides.
+        detail = ""
+        try:
+            body = resp.json()
+            if isinstance(body, dict) and "error" in body:
+                err = body["error"]
+                detail = err.get("message", "") if isinstance(err, dict) else str(err)
+            if not detail:
+                detail = json.dumps(body)
+        except Exception:
+            detail = resp.text
+        raise RuntimeError(f"HTTP {resp.status_code} from {base_url}: {detail[:500]}")
+
+    data = resp.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"No choices in response: {json.dumps(data)[:500]}")
+    return choices[0]["message"]["content"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -125,25 +149,38 @@ def _build_prompt(
         for p in payees_with_notes
     )
 
-    category_list = "\n".join(f"- {cat}" for cat in categories)
+    category_list = ", ".join(categories)
 
-    return f"""You are a personal finance categorization assistant. Given a list of transaction payees (with optional notes) and available categories, suggest the most appropriate category for each payee. Also suggest the best keyword to use for an automatic matching rule.
+    return f"""You are a personal finance categorization assistant. Given a list of transactions (payee + notes) and available categories, suggest the best category and the best rule keyword for each one.
 
 Available categories:
 {category_list}
 
-Uncategorized payees:
+Uncategorized transactions:
 {payee_list}
 
-For each payee, respond with a JSON array where each element has:
-- "payee": the exact payee string
+For each transaction, respond with a JSON array where each element has:
+- "payee": the exact payee string from the input
 - "suggested_category": one of the available categories (must be an exact match)
 - "confidence": "high", "medium", or "low"
 - "reasoning": brief explanation (1 sentence)
-- "match_field": which field the rule should match on — "payee" or "notes"
-- "match_value": the keyword or short phrase to use in the rule (e.g. strip branch numbers, transaction IDs, dates, and other noise — keep only the stable merchant/vendor name that would match future transactions)
+- "match_field": "payee" or "notes" — which field a future rule should match on
+- "match_value": the short, stable keyword to put in the rule
 
-For match_value: extract the core identifier from the payee or notes. For example, if the payee is "TESCO STORES 4831 LONDON" use "TESCO" or "TESCO STORES". If the notes contain a better identifier than the payee, use match_field "notes" instead.
+Choosing match_field — IMPORTANT:
+Prefer "notes" by default. Use "notes" in TWO cases:
+
+(a) Payment intermediaries — the payee column is a bank or payment processor like "PAYPAL", "STRIPE", "KLARNA", "VISA DEBIT", "SEPA", "DIRECT DEBIT", "CARD PAYMENT", "GOOGLE PAY", "APPLE PAY". The real merchant is in notes.
+
+(b) Varied-product marketplaces — the payee IS the merchant, but each transaction is a different product that belongs to a different category. This applies to "AMAZON", "AMZN", "AMAZON MKTP", "AMAZON PAYMENTS", "EBAY", "ETSY", "ALIEXPRESS". For these, match on notes with the most descriptive product keyword (e.g. "Reiniger", "Buch", "Kaffee", "Werkzeug") so each Amazon purchase can land in its specific category instead of one catch-all "Shopping" rule. Prefer a German noun if the notes are in German.
+
+Only choose "payee" when the payee is a single-category merchant (e.g. "TESCO STORES", "NETFLIX.COM", "SPOTIFY AB", "REWE", "DM DROGERIE", "SHELL") — places where every purchase reasonably maps to the same category.
+
+Choosing match_value:
+Extract the core stable identifier. Strip branch numbers, order IDs, dates, marketplace suffixes ("AMZN Mktp DE", "303-3912143-5240367"), and city names. Examples:
+- payee "TESCO STORES 4831 LONDON 20250412" → match_field "payee", match_value "TESCO"
+- payee "PAYPAL", notes "PP*NETFLIX.COM SUBSCRIPTION 14.99 EUR" → match_field "notes", match_value "NETFLIX"
+- payee "AMAZON", notes "Puly Reiniger für Kaffeemaschinen ... 303-3912... AMZN Mktp DE" → match_field "notes", match_value "Reiniger" (or "Kaffee")
 
 Respond ONLY with the JSON array, no other text."""
 
@@ -230,11 +267,25 @@ def suggest_categories(
     """
     prompt = _build_prompt(payees_with_notes, categories)
 
+    print(
+        f"\n===== LLM PROMPT [provider={provider} model={model}] =====\n"
+        f"{prompt}\n"
+        f"===== END PROMPT =====",
+        flush=True,
+    )
+
     if provider == "ollama":
         response_text = _suggest_via_ollama(prompt, base_url, model)
     else:
         # OpenRouter, Apfel, and any OpenAI-compatible endpoint
         response_text = _suggest_via_openai(prompt, base_url, model, api_key)
+
+    print(
+        f"\n===== LLM RESPONSE [provider={provider}] =====\n"
+        f"{response_text}\n"
+        f"===== END RESPONSE =====",
+        flush=True,
+    )
 
     suggestions = _parse_response(response_text)
     return _validate_suggestions(suggestions, categories)

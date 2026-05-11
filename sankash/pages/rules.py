@@ -396,7 +396,7 @@ def inline_ai_error() -> rx.Component:
 
 def uncategorized_row(tx: dict) -> rx.Component:
     """Uncategorized transaction row with manual rule creation and per-row AI buttons."""
-    is_active = RuleState.ai_suggesting_payee == tx["payee"]
+    is_active = RuleState.ai_suggesting_tx_id == tx["id"]
 
     return rx.fragment(
         rx.table.row(
@@ -410,7 +410,9 @@ def uncategorized_row(tx: dict) -> rx.Component:
                     rx.tooltip(
                         rx.button(
                             rx.icon("plus", size=14),
-                            on_click=lambda: RuleState.start_manual_rule(tx["payee"]),
+                            on_click=lambda: RuleState.start_manual_rule(
+                                tx["payee"], tx["id"]
+                            ),
                             size="1",
                             variant="ghost",
                         ),
@@ -420,7 +422,7 @@ def uncategorized_row(tx: dict) -> rx.Component:
                         rx.button(
                             rx.icon("smartphone", size=14),
                             on_click=lambda: RuleState.request_ai_suggestion(
-                                tx["payee"], "apfel"
+                                tx["payee"], "apfel", tx["id"]
                             ),
                             size="1",
                             variant="ghost",
@@ -434,7 +436,7 @@ def uncategorized_row(tx: dict) -> rx.Component:
                         rx.button(
                             rx.icon("globe", size=14),
                             on_click=lambda: RuleState.request_ai_suggestion(
-                                tx["payee"], "openrouter"
+                                tx["payee"], "openrouter", tx["id"]
                             ),
                             size="1",
                             variant="ghost",

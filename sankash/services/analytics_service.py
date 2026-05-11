@@ -41,6 +41,21 @@ def get_transactions_for_period(
     if df.is_empty():
         return pl.DataFrame()
 
+    # Backfill parent_id for old data, then drop split-parent rows so children
+    # are the only representation of those orders (no double-counting).
+    if "parent_id" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("parent_id"))
+    parent_ids = (
+        df.filter(pl.col("parent_id").is_not_null())
+        .select("parent_id")
+        .unique()
+        .to_series()
+        .to_list()
+    )
+    parent_ids = [int(p) for p in parent_ids if p is not None]
+    if parent_ids:
+        df = df.filter(~pl.col("id").is_in(parent_ids))
+
     overrides = read_overrides(data_dir)
     df = merge_overrides(df, overrides)
 

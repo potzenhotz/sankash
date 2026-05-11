@@ -55,6 +55,7 @@ class Transaction(BaseModel):
     transfer_account_id: Optional[int] = None
     imported_id: Optional[str] = None
     import_session_id: Optional[int] = None
+    parent_id: Optional[int] = None  # if set, this row is a split-item child of another transaction
 
 
 class RuleCondition(BaseModel):

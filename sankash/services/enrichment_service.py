@@ -6,7 +6,43 @@ from pathlib import Path
 
 import polars as pl
 
+from sankash.core.models import ImportHistory
 from sankash.core.storage import read_parquet, write_parquet
+from sankash.services.import_history_service import (
+    calculate_file_hash,
+    create_import_history,
+)
+from sankash.services.transaction_service import split_transaction
+
+
+def _record_enrichment_history(
+    data_dir: str,
+    file_path: str | Path,
+    source: str,
+    stats: dict[str, int],
+) -> int | None:
+    """Log an enrichment upload to import_history so it shows alongside CSV imports.
+
+    Uses account_id=0 as a sentinel for cross-account enrichment files (no real
+    account is tied to an Amazon/PayPal export). bank_format identifies the
+    source: "amazon_enrichment" or "paypal_enrichment".
+    """
+    try:
+        path = Path(file_path)
+        record = ImportHistory(
+            filename=path.name,
+            account_id=0,
+            bank_format=f"{source}_enrichment",
+            total_count=int(stats.get(f"total_{source}", 0)),
+            imported_count=int(stats.get("matched", 0)) + int(stats.get("children", 0)),
+            duplicate_count=int(stats.get("skipped", 0)),
+            categorized_count=0,
+            file_hash=calculate_file_hash(path),
+        )
+        return create_import_history(data_dir, record)
+    except Exception:
+        # Don't fail the enrichment run because of a history-logging issue.
+        return None
 
 
 # --- Amazon enrichment ---
@@ -15,11 +51,10 @@ from sankash.core.storage import read_parquet, write_parquet
 AMAZON_ORDER_ID_RE = re.compile(r"[A-Z0-9]{3}-\d{7}-\d{7}")
 
 
-def parse_amazon_csv(file_path: str | Path) -> pl.DataFrame:
-    """Parse Amazon order history CSV export.
+def parse_amazon_csv_items(file_path: str | Path) -> pl.DataFrame:
+    """Parse Amazon order history CSV into per-item rows.
 
     Returns DataFrame with columns: order_id, product_name, unit_price.
-    Multiple items per order are grouped into one row with concatenated names.
     """
     df = pl.read_csv(
         file_path,
@@ -27,22 +62,24 @@ def parse_amazon_csv(file_path: str | Path) -> pl.DataFrame:
         null_values=["Not Available", "N/A", ""],
         infer_schema_length=0,
     )
-
-    # Select relevant columns — strip comma thousand-separators before float cast
-    df = df.select([
+    return df.select([
         pl.col("Order ID").alias("order_id"),
         pl.col("Product Name").alias("product_name"),
         pl.col("Unit Price").str.replace_all(",", "").cast(pl.Float64, strict=False).alias("unit_price"),
     ])
 
-    # Group by order_id: concatenate product names
-    grouped = df.group_by("order_id").agg([
+
+def parse_amazon_csv(file_path: str | Path) -> pl.DataFrame:
+    """Parse Amazon order history CSV export, grouped by order_id.
+
+    Returns DataFrame with columns: order_id, product_names, total_price, item_count.
+    """
+    items = parse_amazon_csv_items(file_path)
+    return items.group_by("order_id").agg([
         pl.col("product_name").str.concat(", ").alias("product_names"),
         pl.col("unit_price").sum().alias("total_price"),
         pl.col("product_name").count().alias("item_count"),
     ])
-
-    return grouped
 
 
 def extract_order_id(notes: str) -> str | None:
@@ -60,76 +97,126 @@ def enrich_with_amazon(
     """Enrich transactions with Amazon order data.
 
     Matches by order ID found in transaction notes.
-    Prepends product name(s) to notes; payee is left unchanged.
 
-    Returns dict with enrichment stats.
+    Single-item orders: prepend the product name to the transaction's notes.
+    Multi-item orders: split the transaction into per-item child rows. Each child's
+    notes is the product name; amounts are pro-rated by unit_price / total_price
+    so the children sum to the original (handles shipping/discount drift).
+
+    Returns dict with stats: matched, skipped, split (number of orders split),
+    children (total child rows created), total_amazon.
     """
-    amazon_df = parse_amazon_csv(file_path)
+    items_df = parse_amazon_csv_items(file_path)
+    amazon_df = items_df.group_by("order_id").agg([
+        pl.col("product_name").str.concat(", ").alias("product_names"),
+        pl.col("unit_price").sum().alias("total_price"),
+        pl.col("product_name").count().alias("item_count"),
+    ])
+
     txn_df = read_parquet(data_dir, "transactions")
-
     if txn_df.is_empty():
-        return {"matched": 0, "skipped": 0, "total_amazon": len(amazon_df)}
+        return {"matched": 0, "skipped": 0, "split": 0, "children": 0, "total_amazon": len(amazon_df)}
 
-    # Extract order IDs from transaction notes
-    txn_df = txn_df.with_columns(
+    # Backfill parent_id col
+    if "parent_id" not in txn_df.columns:
+        txn_df = txn_df.with_columns(pl.lit(None).cast(pl.Int64).alias("parent_id"))
+
+    # Only operate on parent/standalone rows (no parent_id) — never re-split a child.
+    base_df = txn_df.filter(pl.col("parent_id").is_null()).with_columns(
         pl.col("notes")
         .map_elements(extract_order_id, return_dtype=pl.Utf8)
         .alias("_order_id")
     )
 
-    # Find matches
-    matched = txn_df.filter(
+    matched = base_df.filter(
         pl.col("_order_id").is_not_null()
         & pl.col("_order_id").is_in(amazon_df["order_id"])
+    ).join(amazon_df, left_on="_order_id", right_on="order_id", how="left")
+
+    # Lookup table for per-item splits (order_id -> list of (product_name, unit_price))
+    items_by_order: dict[str, list[tuple[str, float]]] = {}
+    for row in items_df.iter_rows(named=True):
+        items_by_order.setdefault(row["order_id"], []).append(
+            (row["product_name"] or "", float(row["unit_price"] or 0.0))
+        )
+
+    # Already-split parents: txns that already have children in the parquet
+    already_split_ids: set[int] = set(
+        int(p) for p in (
+            txn_df.filter(pl.col("parent_id").is_not_null())
+            .select("parent_id").unique().to_series().to_list()
+        ) if p is not None
     )
 
-    # Join to get product names
-    enriched = matched.join(
-        amazon_df,
-        left_on="_order_id",
-        right_on="order_id",
-        how="left",
-    )
-
-    # Build update map: id -> new_notes (skip already-enriched rows)
-    updates: dict[int, str] = {}
+    note_updates: dict[int, str] = {}
+    splits_to_apply: list[tuple[int, list[dict]]] = []
     skipped = 0
-    for row in enriched.iter_rows(named=True):
-        product_names = row["product_names"] or ""
-        if not product_names:
-            continue
-        if len(product_names) > 120:
-            product_names = product_names[:117] + "..."
-        old_notes = row["notes"] or ""
-        if old_notes.startswith(product_names):
+
+    for row in matched.iter_rows(named=True):
+        tx_id = row["id"]
+        if tx_id in already_split_ids:
             skipped += 1
             continue
-        updates[row["id"]] = f"{product_names} | {old_notes}" if old_notes else product_names
 
-    # Apply notes updates to parquet
-    if updates:
-        update_ids = list(updates.keys())
-        new_notes_map = updates
+        order_id = row["_order_id"]
+        item_count = row["item_count"] or 0
+        product_names = row["product_names"] or ""
+        old_notes = row["notes"] or ""
 
-        txn_df_clean = txn_df.drop("_order_id")
-        txn_df_clean = txn_df_clean.with_columns([
+        if item_count > 1:
+            # Multi-item order → split children
+            items = items_by_order.get(order_id, [])
+            total_unit = sum(p for _, p in items) or 1.0
+            parent_amount = float(row["amount"])
+            child_splits = []
+            for product_name, unit_price in items:
+                share = (unit_price / total_unit) if total_unit else (1.0 / max(len(items), 1))
+                child_splits.append({
+                    "notes": product_name,
+                    "amount": round(parent_amount * share, 2),
+                })
+            # Adjust last child to absorb rounding drift so children sum exactly to parent
+            if child_splits:
+                diff = round(parent_amount - sum(c["amount"] for c in child_splits), 2)
+                child_splits[-1]["amount"] = round(child_splits[-1]["amount"] + diff, 2)
+            splits_to_apply.append((tx_id, child_splits))
+        else:
+            # Single-item order → prepend product to notes
+            name = product_names
+            if len(name) > 120:
+                name = name[:117] + "..."
+            if old_notes.startswith(name):
+                skipped += 1
+                continue
+            note_updates[tx_id] = f"{name} | {old_notes}" if old_notes else name
+
+    # Apply notes updates to single-item orders
+    if note_updates:
+        update_ids = list(note_updates.keys())
+        notes_map = note_updates
+        txn_df = txn_df.with_columns([
             pl.when(pl.col("id").is_in(update_ids))
-            .then(
-                pl.col("id").map_elements(
-                    lambda x: new_notes_map.get(x, ""), return_dtype=pl.Utf8
-                )
-            )
+            .then(pl.col("id").map_elements(lambda x: notes_map.get(x, ""), return_dtype=pl.Utf8))
             .otherwise(pl.col("notes"))
             .alias("notes"),
         ])
+        write_parquet(data_dir, "transactions", txn_df)
 
-        write_parquet(data_dir, "transactions", txn_df_clean)
+    # Apply splits for multi-item orders
+    total_children = 0
+    for parent_id, child_splits in splits_to_apply:
+        new_ids = split_transaction(data_dir, parent_id, child_splits)
+        total_children += len(new_ids)
 
-    return {
-        "matched": len(updates),
+    stats = {
+        "matched": len(note_updates) + len(splits_to_apply),
         "skipped": skipped,
+        "split": len(splits_to_apply),
+        "children": total_children,
         "total_amazon": len(amazon_df),
     }
+    _record_enrichment_history(data_dir, file_path, "amazon", stats)
+    return stats
 
 
 # --- PayPal enrichment ---
@@ -269,11 +356,13 @@ def enrich_with_paypal(
 
         write_parquet(data_dir, "transactions", txn_df)
 
-    return {
+    stats = {
         "matched": len(updates),
         "skipped": skipped,
         "total_paypal": len(paypal_df),
     }
+    _record_enrichment_history(data_dir, file_path, "paypal", stats)
+    return stats
 
 
 def preview_enrichment(
@@ -299,6 +388,11 @@ def _preview_amazon(txn_df: pl.DataFrame, file_path: str | Path, limit: int) -> 
     """Preview Amazon enrichment matches."""
     amazon_df = parse_amazon_csv(file_path)
 
+    # Only consider parent/standalone rows (no parent_id) so we don't try to
+    # re-enrich existing split children.
+    if "parent_id" in txn_df.columns:
+        txn_df = txn_df.filter(pl.col("parent_id").is_null())
+
     txn_df = txn_df.with_columns(
         pl.col("notes")
         .map_elements(extract_order_id, return_dtype=pl.Utf8)
@@ -320,11 +414,17 @@ def _preview_amazon(txn_df: pl.DataFrame, file_path: str | Path, limit: int) -> 
     results = []
     for row in enriched.head(limit).iter_rows(named=True):
         product_names = row["product_names"] or ""
+        item_count = row["item_count"] or 0
         if len(product_names) > 120:
             product_names = product_names[:117] + "..."
         old_notes = row["notes"] or ""
         already_enriched = old_notes.startswith(product_names)
-        new_notes = old_notes if already_enriched else (f"{product_names} | {old_notes}" if old_notes else product_names)
+        if item_count > 1:
+            new_notes = f"→ split into {item_count} items: {product_names}"
+        else:
+            new_notes = old_notes if already_enriched else (
+                f"{product_names} | {old_notes}" if old_notes else product_names
+            )
         results.append({
             "id": row["id"],
             "date": str(row["date"]),
@@ -334,6 +434,8 @@ def _preview_amazon(txn_df: pl.DataFrame, file_path: str | Path, limit: int) -> 
             "new_notes": new_notes,
             "amount": row["amount"],
             "already_enriched": already_enriched,
+            "will_split": item_count > 1,
+            "item_count": int(item_count) if item_count else 0,
         })
 
     return results

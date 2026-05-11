@@ -307,7 +307,17 @@ def transaction_row(transaction: dict) -> rx.Component:
             ),
             min_width="110px",
         ),
-        rx.table.cell(transaction["payee"]),
+        rx.table.cell(
+            rx.hstack(
+                rx.text(transaction["payee"]),
+                rx.cond(
+                    transaction.get("parent_id"),
+                    rx.badge("Split", color_scheme="orange", size="1"),
+                ),
+                spacing="1",
+                align="center",
+            ),
+        ),
         rx.table.cell(transaction.get("notes", "-")),
         rx.table.cell(
             rx.text(
