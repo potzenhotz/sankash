@@ -3,6 +3,7 @@
 import reflex as rx
 
 from sankash.components.layout import layout
+from sankash.state.enrichment_state import EnrichmentState
 from sankash.state.import_state import ImportState
 
 
@@ -325,7 +326,189 @@ def import_history_section() -> rx.Component:
     )
 
 
-@rx.page(route="/import", on_load=[ImportState.reset_ui, ImportState.load_accounts, ImportState.load_import_history])
+def enrichment_preview_row(match: dict) -> rx.Component:
+    """Preview row for enrichment matches."""
+    return rx.table.row(
+        rx.table.cell(rx.text(match.get("date", ""), size="2")),
+        rx.table.cell(rx.text(match.get("old_payee", ""), size="2")),
+        rx.table.cell(rx.text(match.get("old_notes", ""), size="2", color="gray")),
+        rx.table.cell(rx.text(match.get("new_notes", ""), size="2", weight="bold")),
+        rx.table.cell(rx.text("€", match.get("amount", 0), size="2")),
+        rx.table.cell(
+            rx.cond(
+                match.get("already_enriched", False),
+                rx.badge("Already done", color_scheme="gray", size="1"),
+                rx.badge("Will update", color_scheme="green", size="1"),
+            ),
+        ),
+    )
+
+
+def enrichment_preview() -> rx.Component:
+    """Preview table for enrichment matches."""
+    return rx.card(
+        rx.vstack(
+            rx.heading("Enrichment Preview", size="4"),
+            rx.text(
+                EnrichmentState.preview_data.length(),
+                " matching transactions found",
+                size="2",
+                color="gray",
+            ),
+            rx.table.root(
+                rx.table.header(
+                    rx.table.row(
+                        rx.table.column_header_cell("Date"),
+                        rx.table.column_header_cell("Payee"),
+                        rx.table.column_header_cell("Current Notes"),
+                        rx.table.column_header_cell("New Notes"),
+                        rx.table.column_header_cell("Amount"),
+                        rx.table.column_header_cell("Status"),
+                    ),
+                ),
+                rx.table.body(
+                    rx.foreach(EnrichmentState.preview_data, enrichment_preview_row)
+                ),
+            ),
+            rx.button(
+                "Apply Enrichment",
+                on_click=EnrichmentState.apply_enrichment,
+                size="2",
+                loading=EnrichmentState.loading,
+            ),
+            spacing="3",
+            width="100%",
+        ),
+    )
+
+
+def enrichment_results() -> rx.Component:
+    """Enrichment results display."""
+    return rx.card(
+        rx.callout(
+            rx.vstack(
+                rx.text(
+                    "Enriched ",
+                    EnrichmentState.enrich_stats.get("matched", 0),
+                    " transactions",
+                    size="3",
+                    weight="bold",
+                ),
+                rx.cond(
+                    EnrichmentState.enrich_stats.get("skipped", 0) > 0,
+                    rx.text(
+                        EnrichmentState.enrich_stats.get("skipped", 0),
+                        " already enriched (skipped)",
+                        size="2",
+                    ),
+                ),
+                spacing="1",
+            ),
+            icon="circle-check",
+            color="green",
+            size="2",
+        ),
+    )
+
+
+def enrichment_section() -> rx.Component:
+    """Enrichment upload section for Amazon and PayPal."""
+    return rx.card(
+        rx.vstack(
+            rx.heading("Enrich Transactions", size="4"),
+            rx.text(
+                "Upload Amazon order history or PayPal activity to add merchant details to transactions",
+                size="2",
+                color="gray",
+            ),
+            rx.grid(
+                # Amazon upload
+                rx.card(
+                    rx.vstack(
+                        rx.hstack(
+                            rx.icon("shopping-cart", size=18),
+                            rx.text("Amazon Orders", size="3", weight="bold"),
+                            align="center",
+                        ),
+                        rx.text(
+                            "Account → Order History → Download",
+                            size="1",
+                            color="gray",
+                        ),
+                        rx.upload(
+                            rx.button("Upload Amazon CSV", size="2", variant="soft"),
+                            id="amazon_upload",
+                            accept={".csv": ["text/csv"]},
+                            on_drop=EnrichmentState.handle_amazon_upload,
+                        ),
+                        spacing="2",
+                    ),
+                    variant="surface",
+                ),
+                # PayPal upload
+                rx.card(
+                    rx.vstack(
+                        rx.hstack(
+                            rx.icon("credit-card", size=18),
+                            rx.text("PayPal Activity", size="3", weight="bold"),
+                            align="center",
+                        ),
+                        rx.text(
+                            "Activity → Download → CSV",
+                            size="1",
+                            color="gray",
+                        ),
+                        rx.upload(
+                            rx.button("Upload PayPal CSV", size="2", variant="soft"),
+                            id="paypal_upload",
+                            accept={".csv": ["text/csv"]},
+                            on_drop=EnrichmentState.handle_paypal_upload,
+                        ),
+                        spacing="2",
+                    ),
+                    variant="surface",
+                ),
+                columns="2",
+                spacing="3",
+                width="100%",
+            ),
+            # Messages
+            rx.cond(
+                EnrichmentState.error != "",
+                rx.text(EnrichmentState.error, color="red", size="2"),
+            ),
+            rx.cond(
+                EnrichmentState.success != "",
+                rx.text(EnrichmentState.success, color="green", size="2"),
+            ),
+            # Preview button
+            rx.cond(
+                EnrichmentState.uploaded_file != "",
+                rx.button(
+                    "Preview Matches",
+                    on_click=EnrichmentState.preview_enrichment,
+                    size="2",
+                    variant="soft",
+                    loading=EnrichmentState.loading,
+                ),
+            ),
+            # Preview table
+            rx.cond(
+                EnrichmentState.show_preview,
+                enrichment_preview(),
+            ),
+            # Results
+            rx.cond(
+                EnrichmentState.show_results,
+                enrichment_results(),
+            ),
+            spacing="3",
+            width="100%",
+        ),
+    )
+
+
+@rx.page(route="/import", on_load=[ImportState.reset_ui, ImportState.load_accounts, ImportState.load_import_history, EnrichmentState.reset_enrichment])
 def import_page() -> rx.Component:
     """CSV import page."""
     return layout(
@@ -346,6 +529,8 @@ def import_page() -> rx.Component:
                 ImportState.show_history,
                 import_history_section(),
             ),
+            rx.divider(),
+            enrichment_section(),
             spacing="4",
             width="100%",
         ),

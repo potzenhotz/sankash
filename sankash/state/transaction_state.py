@@ -6,7 +6,6 @@ import reflex as rx
 
 from sankash.core.models import Rule, RuleAction, RuleCondition
 from sankash.services import transaction_service, category_service, rule_service
-from sankash.services import llm_service, settings_service
 from sankash.state.base import BaseState
 
 
@@ -70,12 +69,6 @@ class TransactionState(BaseState):
     # Delete all confirmation
     show_delete_all_dialog: bool = False
     delete_all_confirm_text: str = ""
-
-    # LLM suggestions
-    llm_suggestions: list[dict] = []
-    llm_loading: bool = False
-    llm_error: str = ""
-    show_suggestions: bool = False
 
     def load_transactions(self) -> None:
         """Load transactions with current filters, search, sort, and pagination."""
@@ -423,143 +416,6 @@ class TransactionState(BaseState):
             self.load_transactions()
         except Exception as e:
             self.rule_form_error = f"Failed to create rule: {str(e)}"
-
-    # --- LLM Suggestion Methods ---
-
-    def generate_suggestions(self) -> None:
-        """Generate AI-powered category suggestions for uncategorized payees."""
-        self.llm_loading = True
-        self.llm_error = ""
-        self.llm_suggestions = []
-
-        try:
-            # Read Ollama config from DB settings
-            base_url = settings_service.get_setting(
-                self.data_dir, "ollama_base_url", "http://localhost:11434"
-            )
-            model = settings_service.get_setting(
-                self.data_dir, "ollama_model", "llama3.2"
-            )
-
-            if not llm_service.check_ollama_available(base_url):
-                self.llm_error = (
-                    "Ollama is not running. Start it with 'ollama serve' "
-                    "and pull a model (e.g. 'ollama pull llama3.2'). "
-                    "You can configure the URL in Settings."
-                )
-                self.llm_loading = False
-                return
-
-            # Gather unique uncategorized payees with sample notes
-            uncategorized = [
-                t for t in self.transactions if not t.get("is_categorized")
-            ]
-
-            if not uncategorized:
-                self.llm_error = "No uncategorized transactions found"
-                self.llm_loading = False
-                return
-
-            # Deduplicate by payee, keep first notes as sample
-            seen_payees: dict[str, str] = {}
-            for txn in uncategorized:
-                payee = txn.get("payee", "")
-                if payee and payee not in seen_payees:
-                    seen_payees[payee] = txn.get("notes") or ""
-
-            payees_with_notes = [
-                {"payee": payee, "notes_sample": notes}
-                for payee, notes in seen_payees.items()
-            ]
-
-            # Use actual category names for the LLM
-            actual_categories = list(self.category_display_map.values())
-
-            suggestions = llm_service.suggest_categories(
-                payees_with_notes, actual_categories, base_url, model
-            )
-
-            # Map actual category names back to display names
-            reverse_map = {v: k for k, v in self.category_display_map.items()}
-
-            for suggestion in suggestions:
-                actual_cat = suggestion.get("suggested_category", "")
-                suggestion["suggested_category"] = reverse_map.get(
-                    actual_cat, actual_cat
-                )
-                # Add notes sample from our data
-                suggestion["notes_sample"] = seen_payees.get(
-                    suggestion.get("payee", ""), ""
-                )
-                suggestion["approved"] = True
-
-            self.llm_suggestions = suggestions
-            self.show_suggestions = True
-        except Exception as e:
-            self.llm_error = f"Failed to generate suggestions: {str(e)}"
-        finally:
-            self.llm_loading = False
-
-    def update_suggestion_category(self, index: int, new_cat: str) -> None:
-        """Update the suggested category for a suggestion."""
-        if 0 <= index < len(self.llm_suggestions):
-            self.llm_suggestions[index]["suggested_category"] = new_cat
-
-    def toggle_suggestion_approval(self, index: int) -> None:
-        """Toggle approval for a suggestion."""
-        if 0 <= index < len(self.llm_suggestions):
-            self.llm_suggestions[index]["approved"] = not self.llm_suggestions[index]["approved"]
-
-    def create_rules_from_suggestions(self) -> None:
-        """Create rules from approved suggestions."""
-        try:
-            approved = [
-                s for s in self.llm_suggestions if s.get("approved")
-            ]
-
-            if not approved:
-                self.llm_error = "No approved suggestions"
-                return
-
-            for suggestion in approved:
-                payee = suggestion.get("payee", "")
-                display_cat = suggestion.get("suggested_category", "")
-                actual_category = self.category_display_map.get(
-                    display_cat, display_cat
-                )
-
-                rule = Rule(
-                    name=f"AI: {payee}",
-                    priority=0,
-                    is_active=True,
-                    match_type="all",
-                    conditions=[
-                        RuleCondition(
-                            field="payee",
-                            operator="contains",
-                            value=payee,
-                        )
-                    ],
-                    actions=[
-                        RuleAction(
-                            action_type="set_category",
-                            value=actual_category,
-                        )
-                    ],
-                )
-                rule_service.create_rule(self.data_dir, rule)
-
-            rule_service.apply_rules_to_uncategorized(self.data_dir)
-            self.dismiss_suggestions()
-            self.load_transactions()
-        except Exception as e:
-            self.llm_error = f"Failed to create rules: {str(e)}"
-
-    def dismiss_suggestions(self) -> None:
-        """Hide suggestions panel and clear state."""
-        self.show_suggestions = False
-        self.llm_suggestions = []
-        self.llm_error = ""
 
     # --- Delete All Methods ---
 

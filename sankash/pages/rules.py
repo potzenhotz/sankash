@@ -1,4 +1,4 @@
-"""Rules management page — one rule per category, inline editing."""
+"""Rules management page — one rule per category, inline editing, per-transaction AI."""
 
 import reflex as rx
 
@@ -179,6 +179,24 @@ def rules_table() -> rx.Component:
                 rx.spacer(),
                 rx.tooltip(
                     rx.button(
+                        rx.cond(
+                            RuleState.rule_sort == "relevance",
+                            rx.icon("arrow-down-wide-narrow", size=16),
+                            rx.icon("arrow-down-a-z", size=16),
+                        ),
+                        rx.cond(
+                            RuleState.rule_sort == "relevance",
+                            "Relevance",
+                            "A-Z",
+                        ),
+                        on_click=RuleState.toggle_rule_sort,
+                        size="2",
+                        variant="soft",
+                    ),
+                    content="Toggle sort: relevance or alphabetic",
+                ),
+                rx.tooltip(
+                    rx.button(
                         rx.icon("download", size=16),
                         "Export",
                         on_click=RuleState.export_rules,
@@ -254,65 +272,226 @@ def rules_table() -> rx.Component:
     )
 
 
-def uncategorized_row(tx: dict) -> rx.Component:
-    """Uncategorized transaction row with quick-assign."""
-    is_assigning = RuleState.assigning_tx_payee == tx["payee"]
+# --- Per-transaction AI suggestion components ---
 
+
+def inline_rule_editor() -> rx.Component:
+    """Inline rule editor row — used for both manual and AI-suggested rules."""
     return rx.table.row(
-        rx.table.cell(rx.text(tx["date"], size="1"), white_space="nowrap"),
         rx.table.cell(
-            rx.text(tx["payee"], size="2"),
-        ),
-        rx.table.cell(rx.text(tx["amount"], size="2"), white_space="nowrap"),
-        rx.table.cell(
-            rx.text(
-                tx["notes"],
-                size="1",
-                color="gray",
-            ),
-        ),
-        rx.table.cell(
-            rx.cond(
-                is_assigning,
-                rx.hstack(
-                    rx.select(
-                        RuleState.categories,
-                        placeholder="Category",
-                        on_change=RuleState.quick_assign_category,
+            rx.hstack(
+                # Confidence badge (only shown for AI suggestions)
+                rx.cond(
+                    RuleState.ai_suggesting_provider != "manual",
+                    rx.badge(
+                        RuleState.ai_suggestion_confidence,
+                        color_scheme=rx.cond(
+                            RuleState.ai_suggestion_confidence == "high",
+                            "green",
+                            rx.cond(
+                                RuleState.ai_suggestion_confidence == "medium",
+                                "yellow",
+                                "red",
+                            ),
+                        ),
                         size="1",
                     ),
+                ),
+                # Category dropdown
+                rx.select(
+                    RuleState.categories,
+                    value=RuleState.ai_suggested_category,
+                    on_change=RuleState.update_ai_suggested_category,
+                    size="1",
+                    placeholder="Category",
+                ),
+                # Rule pattern: field selector + editable match value
+                rx.text("when", size="1", color="gray"),
+                rx.select(
+                    ["payee", "notes"],
+                    value=RuleState.ai_match_field,
+                    on_change=RuleState.update_ai_match_field,
+                    size="1",
+                    width="80px",
+                ),
+                rx.text("contains", size="1", color="gray"),
+                rx.input(
+                    value=RuleState.ai_match_value,
+                    on_change=RuleState.update_ai_match_value,
+                    size="1",
+                    width="150px",
+                    placeholder="match keyword",
+                ),
+                # Reasoning tooltip (only shown for AI suggestions)
+                rx.cond(
+                    RuleState.ai_suggesting_provider != "manual",
+                    rx.tooltip(
+                        rx.icon("info", size=14, color="gray"),
+                        content=RuleState.ai_suggestion_reasoning,
+                    ),
+                ),
+                # Create rule (applies to future too)
+                rx.tooltip(
                     rx.button(
-                        rx.icon("x", size=14),
-                        on_click=RuleState.cancel_assign,
+                        rx.icon("check", size=14),
+                        "Create Rule",
+                        on_click=RuleState.accept_ai_suggestion,
                         size="1",
-                        variant="ghost",
+                        color_scheme="green",
+                    ),
+                    content="Create a rule that auto-categorizes future transactions too",
+                ),
+                # Just this one (no rule)
+                rx.tooltip(
+                    rx.button(
+                        "Just This Once",
+                        on_click=RuleState.apply_once,
+                        size="1",
+                        variant="soft",
+                    ),
+                    content="Categorize only the current transaction(s), no rule created",
+                ),
+                # Cancel
+                rx.button(
+                    rx.icon("x", size=14),
+                    on_click=RuleState.reject_ai_suggestion,
+                    size="1",
+                    variant="ghost",
+                    color_scheme="red",
+                ),
+                spacing="2",
+                align="center",
+                padding="2",
+            ),
+            col_span=5,
+        ),
+        style={"background": "var(--green-2)"},
+    )
+
+
+def inline_ai_error() -> rx.Component:
+    """Inline error row for a failed AI suggestion."""
+    return rx.table.row(
+        rx.table.cell(
+            rx.hstack(
+                rx.callout(
+                    RuleState.ai_error,
+                    icon="triangle_alert",
+                    color_scheme="red",
+                    size="1",
+                ),
+                rx.button(
+                    rx.icon("x", size=14),
+                    on_click=RuleState.reject_ai_suggestion,
+                    size="1",
+                    variant="ghost",
+                ),
+                spacing="2",
+                align="center",
+            ),
+            col_span=5,
+        ),
+    )
+
+
+def uncategorized_row(tx: dict) -> rx.Component:
+    """Uncategorized transaction row with manual rule creation and per-row AI buttons."""
+    is_active = RuleState.ai_suggesting_payee == tx["payee"]
+
+    return rx.fragment(
+        rx.table.row(
+            rx.table.cell(rx.text(tx["date"], size="1"), white_space="nowrap"),
+            rx.table.cell(rx.text(tx["payee"], size="2")),
+            rx.table.cell(rx.text(tx["amount"], size="2"), white_space="nowrap"),
+            rx.table.cell(rx.text(tx["notes"], size="1", color="gray")),
+            # Action buttons: manual rule + AI providers
+            rx.table.cell(
+                rx.hstack(
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("plus", size=14),
+                            on_click=lambda: RuleState.start_manual_rule(tx["payee"]),
+                            size="1",
+                            variant="ghost",
+                        ),
+                        content="Create rule manually",
+                    ),
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("smartphone", size=14),
+                            on_click=lambda: RuleState.request_ai_suggestion(
+                                tx["payee"], "apfel"
+                            ),
+                            size="1",
+                            variant="ghost",
+                            loading=is_active
+                            & (RuleState.ai_suggesting_provider == "apfel")
+                            & RuleState.ai_loading,
+                        ),
+                        content="Suggest via Apfel (local)",
+                    ),
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("globe", size=14),
+                            on_click=lambda: RuleState.request_ai_suggestion(
+                                tx["payee"], "openrouter"
+                            ),
+                            size="1",
+                            variant="ghost",
+                            loading=is_active
+                            & (RuleState.ai_suggesting_provider == "openrouter")
+                            & RuleState.ai_loading,
+                        ),
+                        content="Suggest via OpenRouter",
                     ),
                     spacing="1",
                 ),
-                rx.tooltip(
-                    rx.button(
-                        rx.icon("plus", size=14),
-                        on_click=lambda: RuleState.start_assign(tx["payee"]),
-                        size="1",
-                        variant="ghost",
-                    ),
-                    content="Assign to category",
-                ),
             ),
+        ),
+        # Inline rule editor (shown when active and not loading, no error)
+        rx.cond(
+            is_active & ~RuleState.ai_loading & (RuleState.ai_error == ""),
+            inline_rule_editor(),
+        ),
+        # Inline error (shown when active and not loading, has error)
+        rx.cond(
+            is_active & ~RuleState.ai_loading & (RuleState.ai_error != ""),
+            inline_ai_error(),
         ),
     )
 
 
 def uncategorized_panel() -> rx.Component:
-    """Panel showing uncategorized transactions."""
+    """Panel showing uncategorized transactions with per-row AI buttons."""
     return rx.card(
         rx.vstack(
             rx.hstack(
                 rx.icon("circle-alert", size=18, color="orange"),
                 rx.heading("Uncategorized", size="4"),
                 rx.badge(RuleState.uncategorized_count, color_scheme="orange", variant="soft"),
+                rx.spacer(),
+                rx.cond(
+                    RuleState.apfel_running,
+                    rx.badge(
+                        rx.icon("smartphone", size=12),
+                        "Apfel running",
+                        color_scheme="green",
+                        variant="soft",
+                    ),
+                    rx.tooltip(
+                        rx.button(
+                            rx.icon("smartphone", size=14),
+                            "Start Apfel",
+                            on_click=RuleState.start_apfel,
+                            size="1",
+                            variant="soft",
+                        ),
+                        content="Start local Apfel server for on-device AI",
+                    ),
+                ),
                 spacing="2",
                 align="center",
+                width="100%",
             ),
             rx.cond(
                 RuleState.uncategorized_count == 0,
@@ -347,7 +526,7 @@ def uncategorized_panel() -> rx.Component:
 
 @rx.page(
     route="/rules",
-    on_load=[RuleState.load_rules, RuleState.load_categories, RuleState.load_uncategorized],
+    on_load=[RuleState.load_rules, RuleState.load_categories, RuleState.load_uncategorized, RuleState.check_apfel_status],
 )
 def rules_page() -> rx.Component:
     """Rules page."""

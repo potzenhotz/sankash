@@ -4,8 +4,9 @@ import json
 
 import reflex as rx
 
-from sankash.core.models import RuleCondition
+from sankash.core.models import Rule, RuleAction, RuleCondition
 from sankash.services import rule_service, category_service, transaction_service
+from sankash.services import llm_service, settings_service
 from sankash.state.base import BaseState
 
 
@@ -19,6 +20,7 @@ class RuleState(BaseState):
     loading: bool = False
     error: str = ""
     success: str = ""
+    rule_sort: str = "relevance"  # "relevance" or "alphabetic"
 
     # Inline editing: which category is currently being edited
     editing_category: str = ""
@@ -32,13 +34,23 @@ class RuleState(BaseState):
     uncategorized_transactions: list[dict] = []
     uncategorized_count: int = 0
 
-    # Quick-assign
-    assigning_tx_payee: str = ""
+    # Per-transaction AI / manual rule creation state
+    ai_suggesting_payee: str = ""        # which payee is currently loading/showing
+    ai_suggesting_provider: str = ""     # "apfel" or "openrouter"
+    ai_loading: bool = False
+    ai_error: str = ""
+    ai_suggested_category: str = ""      # display name, pre-filled in dropdown
+    ai_suggestion_confidence: str = ""
+    ai_suggestion_reasoning: str = ""
+    ai_match_field: str = "payee"        # "payee" or "notes" — LLM-suggested rule field
+    ai_match_value: str = ""             # LLM-suggested keyword for the rule condition
+
+    # Apfel server process
+    apfel_running: bool = False
 
     def load_rules(self) -> None:
         """Load all categories with their rule info."""
         self.loading = True
-        self.error = ""
 
         try:
             # Run migration on first load
@@ -46,9 +58,12 @@ class RuleState(BaseState):
             if merges:
                 self.success = f"Migrated rules: merged {merges} duplicate(s)"
 
-            # Get all categories
+            # Get only subcategories (rules don't apply to parent categories)
             cat_df = category_service.get_categories(self.data_dir)
-            all_cats = cat_df.to_dicts() if not cat_df.is_empty() else []
+            all_cats = [
+                c for c in (cat_df.to_dicts() if not cat_df.is_empty() else [])
+                if c.get("parent_category") is not None
+            ]
 
             # Get all rules indexed by target category
             rules_df = rule_service.get_rules(self.data_dir, active_only=False)
@@ -113,15 +128,27 @@ class RuleState(BaseState):
                     "priority": rule_info.get("priority", 0),
                 })
 
-            # Sort: categories with conditions first (by match count desc), then without (alphabetically)
-            category_rules.sort(
-                key=lambda r: (not r["has_conditions"], -r["match_count"], r["display_name"])
-            )
-            self.category_rules = category_rules
+            self._sort_rules(category_rules)
         except Exception as e:
             self.error = f"Failed to load rules: {str(e)}"
         finally:
             self.loading = False
+
+    def _sort_rules(self, category_rules: list[dict]) -> None:
+        """Sort rules by current sort mode and store."""
+        if self.rule_sort == "alphabetic":
+            category_rules.sort(key=lambda r: r["display_name"].lower())
+        else:
+            # Relevance: conditions first (by match count desc), then without (alphabetically)
+            category_rules.sort(
+                key=lambda r: (not r["has_conditions"], -r["match_count"], r["display_name"])
+            )
+        self.category_rules = category_rules
+
+    def toggle_rule_sort(self) -> None:
+        """Toggle between relevance and alphabetic sorting."""
+        self.rule_sort = "alphabetic" if self.rule_sort == "relevance" else "relevance"
+        self._sort_rules(list(self.category_rules))
 
     def load_categories(self) -> None:
         """Load category display names for quick-assign."""
@@ -205,7 +232,7 @@ class RuleState(BaseState):
         if 0 <= index < len(self.conditions):
             self.conditions[index]["value"] = value
 
-    def save_conditions(self) -> None:
+    def save_conditions(self):
         """Save conditions for the currently editing category."""
         if not self.editing_category:
             return
@@ -224,10 +251,10 @@ class RuleState(BaseState):
                 # No conditions — delete the rule if it exists
                 if existing:
                     rule_service.delete_rule(self.data_dir, existing["id"])
-                self.stop_editing()
-                self.load_rules()
+                self.editing_category = ""
+                self.conditions = []
                 self.success = f"Conditions cleared for '{category}'"
-                return
+                return RuleState.load_rules
 
             from sankash.core.models import Rule, RuleAction
             rule_conditions = [
@@ -249,9 +276,10 @@ class RuleState(BaseState):
             else:
                 rule_service.create_rule(self.data_dir, rule)
 
-            self.stop_editing()
-            self.load_rules()
+            self.editing_category = ""
+            self.conditions = []
             self.success = f"Conditions saved for '{category}'"
+            return RuleState.load_rules
         except Exception as e:
             self.error = f"Failed to save conditions: {str(e)}"
 
@@ -281,58 +309,265 @@ class RuleState(BaseState):
         except Exception as e:
             self.error = f"Failed to update priority: {str(e)}"
 
-    # --- Quick-assign from uncategorized panel ---
+    # --- Manual rule creation from uncategorized panel ---
 
-    def start_assign(self, payee: str) -> None:
-        """Start quick-assign flow for a transaction payee."""
-        self.assigning_tx_payee = payee
+    def start_manual_rule(self, payee: str) -> None:
+        """Open inline rule editor for a transaction, pre-filled with its payee."""
+        self._clear_ai_state()
+        self.ai_suggesting_payee = payee
+        self.ai_suggesting_provider = "manual"
+        self.ai_match_field = "payee"
+        self.ai_match_value = payee
+        self.ai_suggested_category = ""
 
-    def quick_assign_category(self, category_display: str) -> None:
-        """Add the payee as a condition to the selected category's rule."""
-        if not self.assigning_tx_payee or not category_display:
+    # --- Apply rules ---
+
+    def apply_rules(self):
+        """Apply rules to uncategorized transactions."""
+        self.error = ""
+        self.success = ""
+        try:
+            count = rule_service.apply_rules_to_uncategorized(self.data_dir)
+            self.success = f"Categorized {count} transactions"
+        except Exception as e:
+            self.error = f"Failed to apply rules: {str(e)}"
+        return [RuleState.load_rules, RuleState.load_uncategorized]
+
+    def apply_rules_all(self):
+        """Re-apply all rules (rules dominate, manual fallback preserved)."""
+        self.error = ""
+        self.success = ""
+        try:
+            count = rule_service.apply_rules_to_all(self.data_dir)
+            self.success = f"Re-categorized {count} transactions"
+        except Exception as e:
+            self.error = f"Failed to apply rules: {str(e)}"
+        return [RuleState.load_rules, RuleState.load_uncategorized]
+
+    # --- Apfel server management ---
+
+    def start_apfel(self):
+        """Start the Apfel server as a background process."""
+        import subprocess
+        import time
+
+        try:
+            # Check if already reachable
+            if llm_service.check_provider_available("apfel", "http://localhost:11434"):
+                self.apfel_running = True
+                return
+
+            subprocess.Popen(
+                ["apfel", "--serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self.apfel_running = True
+            yield  # show "starting" state
+
+            # Wait briefly for server to come up
+            for _ in range(10):
+                time.sleep(0.5)
+                if llm_service.check_provider_available("apfel", "http://localhost:11434"):
+                    return
+            self.ai_error = "Apfel started but not yet reachable — try again in a moment"
+        except FileNotFoundError:
+            self.apfel_running = False
+            self.ai_error = (
+                "apfel not found. Install with: "
+                "brew tap Arthur-Ficial/tap && brew install apfel"
+            )
+        except Exception as e:
+            self.apfel_running = False
+            self.ai_error = f"Failed to start Apfel: {e}"
+
+    def check_apfel_status(self) -> None:
+        """Check if Apfel server is reachable and update status."""
+        self.apfel_running = llm_service.check_provider_available(
+            "apfel", "http://localhost:11434"
+        )
+
+    # --- Per-transaction AI Suggestion Methods ---
+
+    def _resolve_provider_config(self, provider: str) -> tuple[str, str, str | None]:
+        """Return (base_url, model, api_key) for a given provider."""
+        if provider == "apfel":
+            preset = llm_service.PROVIDER_PRESETS["apfel"]
+            return (
+                settings_service.get_setting(
+                    self.data_dir, "apfel_base_url", preset["default_base_url"]
+                ),
+                settings_service.get_setting(
+                    self.data_dir, "apfel_model", preset["default_model"]
+                ),
+                None,
+            )
+        elif provider == "openrouter":
+            return (
+                settings_service.get_setting(
+                    self.data_dir, "openai_base_url", "https://openrouter.ai/api"
+                ),
+                settings_service.get_setting(
+                    self.data_dir, "openai_model",
+                    llm_service.PROVIDER_PRESETS["openrouter"]["default_model"],
+                ),
+                settings_service.get_setting(
+                    self.data_dir, "openai_api_key", ""
+                ) or None,
+            )
+        elif provider == "ollama":
+            return (
+                settings_service.get_setting(
+                    self.data_dir, "ollama_base_url", "http://localhost:11434"
+                ),
+                settings_service.get_setting(
+                    self.data_dir, "ollama_model", "llama3.2"
+                ),
+                None,
+            )
+        else:
+            return (
+                settings_service.get_setting(self.data_dir, "openai_base_url", ""),
+                settings_service.get_setting(self.data_dir, "openai_model", ""),
+                settings_service.get_setting(self.data_dir, "openai_api_key", "") or None,
+            )
+
+    def request_ai_suggestion(self, payee: str, provider: str):
+        """Request AI category suggestion for a single transaction."""
+        self._clear_ai_state()
+        self.ai_suggesting_payee = payee
+        self.ai_suggesting_provider = provider
+        self.ai_loading = True
+        self.ai_error = ""
+        self.ai_suggested_category = ""
+        self.ai_suggestion_confidence = ""
+        self.ai_suggestion_reasoning = ""
+        yield  # flush loading state to UI before blocking HTTP call
+
+        try:
+            base_url, model, api_key = self._resolve_provider_config(provider)
+
+            if not llm_service.check_provider_available(provider, base_url, api_key):
+                label = llm_service.PROVIDER_PRESETS.get(provider, {}).get("label", provider)
+                self.ai_error = f"{label} is not reachable at {base_url}. Check Settings."
+                self.ai_loading = False
+                return
+
+            # Find notes for this payee
+            notes_sample = ""
+            for tx in self.uncategorized_transactions:
+                if tx.get("payee") == payee:
+                    notes_sample = tx.get("notes", "") or ""
+                    break
+
+            actual_categories = list(self.category_display_map.values())
+
+            suggestions = llm_service.suggest_categories(
+                [{"payee": payee, "notes_sample": notes_sample}],
+                actual_categories,
+                base_url,
+                model,
+                provider=provider,
+                api_key=api_key,
+            )
+
+            if suggestions:
+                s = suggestions[0]
+                actual_cat = s.get("suggested_category", "")
+                reverse_map = {v: k for k, v in self.category_display_map.items()}
+                self.ai_suggested_category = reverse_map.get(actual_cat, actual_cat)
+                self.ai_suggestion_confidence = s.get("confidence", "")
+                self.ai_suggestion_reasoning = s.get("reasoning", "")
+                self.ai_match_field = s.get("match_field", "payee")
+                self.ai_match_value = s.get("match_value", payee)
+                # Validate match_field
+                if self.ai_match_field not in ("payee", "notes"):
+                    self.ai_match_field = "payee"
+                # Fallback if LLM didn't return a match_value
+                if not self.ai_match_value:
+                    self.ai_match_value = payee
+            else:
+                self.ai_error = "No suggestion returned"
+        except Exception as e:
+            self.ai_error = f"Suggestion failed: {str(e)}"
+        finally:
+            self.ai_loading = False
+
+    def update_ai_suggested_category(self, new_cat: str) -> None:
+        """User overrides the AI-suggested category in the dropdown."""
+        self.ai_suggested_category = new_cat
+
+    def update_ai_match_field(self, field: str) -> None:
+        """User overrides the AI-suggested match field."""
+        if field in ("payee", "notes"):
+            self.ai_match_field = field
+
+    def update_ai_match_value(self, value: str) -> None:
+        """User overrides the AI-suggested match value."""
+        self.ai_match_value = value
+
+    def accept_ai_suggestion(self):
+        """Accept the current AI suggestion: create a rule and apply it."""
+        if not self.ai_match_value or not self.ai_suggested_category:
             return
 
         try:
             actual_category = self.category_display_map.get(
-                category_display, category_display
+                self.ai_suggested_category, self.ai_suggested_category
             )
             condition = RuleCondition(
-                field="payee",
+                field=self.ai_match_field,
                 operator="contains",
-                value=self.assigning_tx_payee,
+                value=self.ai_match_value,
             )
             rule_service.add_condition_to_category(self.data_dir, actual_category, condition)
-            self.assigning_tx_payee = ""
-            self.load_rules()
-            self.success = f"Added '{condition.value}' to {actual_category}"
+            rule_service.apply_rules_to_uncategorized(self.data_dir)
+            self.success = f"Rule: {self.ai_match_field} contains '{self.ai_match_value}' → {actual_category}"
+            self._clear_ai_state()
         except Exception as e:
-            self.error = f"Failed to assign: {str(e)}"
+            self.ai_error = f"Failed to create rule: {str(e)}"
+        return [RuleState.load_rules, RuleState.load_uncategorized]
 
-    def cancel_assign(self) -> None:
-        """Cancel quick-assign."""
-        self.assigning_tx_payee = ""
+    def apply_once(self):
+        """Categorize matching uncategorized transactions without creating a rule."""
+        if not self.ai_suggesting_payee or not self.ai_suggested_category:
+            return
 
-    # --- Apply rules ---
-
-    def apply_rules(self) -> None:
-        """Apply rules to uncategorized transactions."""
         try:
-            count = rule_service.apply_rules_to_uncategorized(self.data_dir)
-            self.load_rules()
-            self.load_uncategorized()
-            self.success = f"Categorized {count} transactions"
+            actual_category = self.category_display_map.get(
+                self.ai_suggested_category, self.ai_suggested_category
+            )
+            # Find all uncategorized transactions matching this payee
+            matching_ids = [
+                tx["id"] for tx in self.uncategorized_transactions
+                if tx.get("payee") == self.ai_suggesting_payee
+            ]
+            if matching_ids:
+                transaction_service.bulk_update_categories(
+                    self.data_dir, matching_ids, actual_category, source="manual"
+                )
+            self.success = f"Categorized {len(matching_ids)} transaction(s) as {actual_category}"
+            self._clear_ai_state()
         except Exception as e:
-            self.error = f"Failed to apply rules: {str(e)}"
+            self.ai_error = f"Failed to categorize: {str(e)}"
+        return [RuleState.load_rules, RuleState.load_uncategorized]
 
-    def apply_rules_all(self) -> None:
-        """Re-apply all rules (rules dominate, manual fallback preserved)."""
-        try:
-            count = rule_service.apply_rules_to_all(self.data_dir)
-            self.load_rules()
-            self.load_uncategorized()
-            self.success = f"Re-categorized {count} transactions"
-        except Exception as e:
-            self.error = f"Failed to apply rules: {str(e)}"
+    def reject_ai_suggestion(self) -> None:
+        """Dismiss the current AI suggestion."""
+        self._clear_ai_state()
+
+    def _clear_ai_state(self) -> None:
+        """Reset all per-transaction AI state."""
+        self.ai_suggesting_payee = ""
+        self.ai_suggesting_provider = ""
+        self.ai_loading = False
+        self.ai_error = ""
+        self.ai_suggested_category = ""
+        self.ai_suggestion_confidence = ""
+        self.ai_suggestion_reasoning = ""
+        self.ai_match_field = "payee"
+        self.ai_match_value = ""
 
     # --- Export/Import ---
 

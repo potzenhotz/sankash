@@ -287,126 +287,6 @@ def create_rule_dialog() -> rx.Component:
     )
 
 
-# --- AI Suggestions Components ---
-
-
-def suggestion_row(suggestion: dict, index: int) -> rx.Component:
-    """Single suggestion row in the AI suggestions panel."""
-    return rx.hstack(
-        # Approve/reject toggle
-        rx.button(
-            rx.cond(
-                suggestion["approved"],
-                rx.icon("check", size=16),
-                rx.icon("x", size=16),
-            ),
-            on_click=lambda: TransactionState.toggle_suggestion_approval(index),
-            size="1",
-            variant=rx.cond(suggestion["approved"], "solid", "outline"),
-            color_scheme=rx.cond(suggestion["approved"], "green", "red"),
-        ),
-        # Payee + notes
-        rx.vstack(
-            rx.text(suggestion["payee"], size="2", weight="bold"),
-            rx.cond(
-                suggestion.get("notes_sample", "") != "",
-                rx.text(suggestion["notes_sample"], size="1", color="gray"),
-            ),
-            spacing="1",
-            flex="1",
-        ),
-        # Category dropdown
-        rx.select(
-            TransactionState.categories,
-            value=suggestion["suggested_category"],
-            on_change=lambda val: TransactionState.update_suggestion_category(index, val),
-            size="2",
-        ),
-        # Confidence badge
-        rx.badge(
-            suggestion["confidence"],
-            color_scheme=rx.cond(
-                suggestion["confidence"] == "high",
-                "green",
-                rx.cond(
-                    suggestion["confidence"] == "medium",
-                    "yellow",
-                    "red",
-                ),
-            ),
-            size="1",
-        ),
-        # Reasoning tooltip
-        rx.tooltip(
-            rx.icon("info", size=14, color="gray"),
-            content=suggestion.get("reasoning", ""),
-        ),
-        spacing="3",
-        width="100%",
-        align="center",
-        padding="8px",
-    )
-
-
-def ai_suggestions_panel() -> rx.Component:
-    """Panel showing AI-generated category suggestions."""
-    return rx.cond(
-        TransactionState.show_suggestions,
-        rx.card(
-            rx.vstack(
-                rx.hstack(
-                    rx.icon("sparkles", size=20),
-                    rx.heading("AI Suggestions", size="4"),
-                    rx.spacer(),
-                    rx.button(
-                        rx.icon("x", size=16),
-                        on_click=TransactionState.dismiss_suggestions,
-                        size="1",
-                        variant="ghost",
-                    ),
-                    width="100%",
-                    align="center",
-                ),
-                rx.cond(
-                    TransactionState.llm_error != "",
-                    rx.callout(
-                        TransactionState.llm_error,
-                        icon="triangle_alert",
-                        color_scheme="red",
-                        size="1",
-                    ),
-                ),
-                rx.vstack(
-                    rx.foreach(
-                        TransactionState.llm_suggestions,
-                        lambda s, idx: suggestion_row(s, idx),
-                    ),
-                    spacing="1",
-                    width="100%",
-                ),
-                rx.hstack(
-                    rx.button(
-                        rx.icon("check", size=16),
-                        "Create Rules from Approved",
-                        on_click=TransactionState.create_rules_from_suggestions,
-                        color_scheme="green",
-                    ),
-                    rx.button(
-                        "Dismiss",
-                        on_click=TransactionState.dismiss_suggestions,
-                        variant="soft",
-                        color_scheme="gray",
-                    ),
-                    spacing="3",
-                    justify="end",
-                    width="100%",
-                ),
-                spacing="3",
-                width="100%",
-            ),
-        ),
-    )
-
 
 # --- Transaction Table ---
 
@@ -676,14 +556,6 @@ def transactions_page() -> rx.Component:
                     variant="soft",
                 ),
                 rx.button(
-                    rx.icon("sparkles", size=18),
-                    "AI Suggest Rules",
-                    on_click=TransactionState.generate_suggestions,
-                    loading=TransactionState.llm_loading,
-                    size="2",
-                    variant="soft",
-                ),
-                rx.button(
                     rx.icon("trash-2", size=18),
                     "Delete All",
                     on_click=TransactionState.open_delete_all_dialog,
@@ -695,19 +567,9 @@ def transactions_page() -> rx.Component:
                 align="center",
             ),
             rx.text("View and categorize your transactions", color="gray", size="3"),
-            rx.cond(
-                TransactionState.llm_error != "",
-                rx.callout(
-                    TransactionState.llm_error,
-                    icon="triangle_alert",
-                    color_scheme="red",
-                    size="1",
-                ),
-            ),
             rx.divider(),
             search_bar(),
             transaction_filters(),
-            ai_suggestions_panel(),
             rx.cond(
                 TransactionState.selected_ids.length() > 0,
                 bulk_actions(),
