@@ -39,12 +39,18 @@ def write_parquet(data_dir: str, name: str, df: pl.DataFrame) -> None:
 
 
 def append_parquet(data_dir: str, name: str, new_df: pl.DataFrame) -> None:
-    """Append rows to an existing Parquet file (or create it)."""
+    """Append rows to an existing Parquet file (or create it).
+
+    Uses ``how="diagonal_relaxed"`` so integer columns written narrowly in older
+    parquet files (e.g. Int32) can be promoted to the wider type used by new
+    rows (Int64) without raising. Required for schema evolution like the
+    addition of ``parent_id`` on Transactions.
+    """
     existing = read_parquet(data_dir, name)
     if existing.is_empty():
         combined = new_df
     else:
-        combined = pl.concat([existing, new_df], how="diagonal")
+        combined = pl.concat([existing, new_df], how="diagonal_relaxed")
     write_parquet(data_dir, name, combined)
 
 

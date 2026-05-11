@@ -297,13 +297,21 @@ def inline_rule_editor() -> rx.Component:
                         size="1",
                     ),
                 ),
-                # Category dropdown
-                rx.select(
-                    RuleState.categories,
+                # Category combobox — typing filters via native HTML datalist
+                rx.input(
                     value=RuleState.ai_suggested_category,
                     on_change=RuleState.update_ai_suggested_category,
+                    placeholder="Category (type to filter)",
                     size="1",
-                    placeholder="Category",
+                    width="200px",
+                    custom_attrs={"list": "ai_category_options"},
+                ),
+                rx.el.datalist(
+                    rx.foreach(
+                        RuleState.categories,
+                        lambda c: rx.el.option(value=c),
+                    ),
+                    id="ai_category_options",
                 ),
                 # Rule pattern: field selector + editable match value
                 rx.text("when", size="1", color="gray"),

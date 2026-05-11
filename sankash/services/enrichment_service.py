@@ -51,10 +51,56 @@ def _record_enrichment_history(
 AMAZON_ORDER_ID_RE = re.compile(r"[A-Z0-9]{3}-\d{7}-\d{7}")
 
 
+def _parse_money_to_float(value: str | None) -> float | None:
+    """Parse an Amazon money string to float, locale-tolerant.
+
+    Handles:
+    - US/English: "1,234.56" → thousands comma, decimal dot
+    - German:    "1.234,56" → thousands dot, decimal comma
+    - Plain:     "12.99" / "12,99" / "12"
+    - Currency symbols and spaces: "EUR 12,99", "€12.99", " 12.99 "
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    # Drop currency symbols and letters, keep digits/sign/separators
+    cleaned = []
+    for ch in s:
+        if ch.isdigit() or ch in ",.-+":
+            cleaned.append(ch)
+    s = "".join(cleaned)
+    if not s:
+        return None
+    has_dot = "." in s
+    has_comma = "," in s
+    if has_dot and has_comma:
+        # Decimal separator is whichever appears LAST
+        if s.rfind(",") > s.rfind("."):
+            # German: dots are thousands, comma is decimal
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            # English: commas are thousands, dot is decimal
+            s = s.replace(",", "")
+    elif has_comma:
+        # Only comma → treat as decimal (German "12,99")
+        s = s.replace(",", ".")
+    # else: only dot or no separator — leave as-is
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def parse_amazon_csv_items(file_path: str | Path) -> pl.DataFrame:
     """Parse Amazon order history CSV into per-item rows.
 
     Returns DataFrame with columns: order_id, product_name, unit_price.
+
+    ``unit_price`` is the per-line total used for pro-rating splits. It prefers
+    "Item Total" / "Item Subtotal" when present (these already include the
+    purchased quantity); otherwise falls back to "Unit Price" × "Quantity".
     """
     df = pl.read_csv(
         file_path,
@@ -62,11 +108,38 @@ def parse_amazon_csv_items(file_path: str | Path) -> pl.DataFrame:
         null_values=["Not Available", "N/A", ""],
         infer_schema_length=0,
     )
-    return df.select([
-        pl.col("Order ID").alias("order_id"),
-        pl.col("Product Name").alias("product_name"),
-        pl.col("Unit Price").str.replace_all(",", "").cast(pl.Float64, strict=False).alias("unit_price"),
-    ])
+
+    columns = set(df.columns)
+    # Pick the best line-total column available in this export variant
+    total_col_candidates = ["Item Total", "Item Subtotal", "Purchase Price Per Unit"]
+    line_total_col = next((c for c in total_col_candidates if c in columns), None)
+    has_qty = "Quantity" in columns
+    has_unit_price = "Unit Price" in columns
+
+    rows = df.to_dicts()
+    out: list[dict] = []
+    for r in rows:
+        line_total: float | None = None
+        if line_total_col:
+            line_total = _parse_money_to_float(r.get(line_total_col))
+        if line_total is None and has_unit_price:
+            unit = _parse_money_to_float(r.get("Unit Price"))
+            qty_raw = r.get("Quantity") if has_qty else 1
+            try:
+                qty = int(qty_raw) if qty_raw not in (None, "") else 1
+            except (ValueError, TypeError):
+                qty = 1
+            line_total = (unit or 0.0) * qty if unit is not None else None
+        out.append({
+            "order_id": r.get("Order ID"),
+            "product_name": r.get("Product Name"),
+            "unit_price": line_total,
+        })
+    return pl.DataFrame(out, schema={
+        "order_id": pl.Utf8,
+        "product_name": pl.Utf8,
+        "unit_price": pl.Float64,
+    })
 
 
 def parse_amazon_csv(file_path: str | Path) -> pl.DataFrame:
@@ -152,6 +225,19 @@ def enrich_with_amazon(
     splits_to_apply: list[tuple[int, list[dict]]] = []
     skipped = 0
 
+    # Amazon ships multi-item orders in pieces, producing one bank charge per
+    # shipment (or per item). Reconciliation strategy per bank charge:
+    #   1. parent_amount ≈ full order total          → split into all items
+    #   2. parent_amount ≈ exactly one item's price  → enrich notes with that item only
+    #   3. neither                                    → unreconciled; prepend all
+    #      product names so the user can categorize manually.
+    RECONCILE_TOLERANCE_EUR = 1.0
+    unreconciled = 0
+    partial_shipment = 0
+
+    def _truncate(s: str) -> str:
+        return s if len(s) <= 120 else s[:117] + "..."
+
     for row in matched.iter_rows(named=True):
         tx_id = row["id"]
         if tx_id in already_split_ids:
@@ -162,12 +248,28 @@ def enrich_with_amazon(
         item_count = row["item_count"] or 0
         product_names = row["product_names"] or ""
         old_notes = row["notes"] or ""
+        parent_amount = float(row["amount"])
+        items = items_by_order.get(order_id, [])
+        order_total = sum(p for _, p in items)
+        abs_parent = abs(parent_amount)
 
-        if item_count > 1:
-            # Multi-item order → split children
-            items = items_by_order.get(order_id, [])
-            total_unit = sum(p for _, p in items) or 1.0
-            parent_amount = float(row["amount"])
+        # Case 1: full order charged at once → split into all items
+        full_order_match = (
+            item_count > 1
+            and order_total > 0
+            and abs(abs_parent - order_total) <= RECONCILE_TOLERANCE_EUR
+        )
+
+        # Case 2: single-item shipment of a multi-item order — bank charge matches one item
+        single_item_match: tuple[str, float] | None = None
+        if not full_order_match and item_count > 1:
+            for product_name, unit_price in items:
+                if unit_price and abs(abs_parent - unit_price) <= RECONCILE_TOLERANCE_EUR:
+                    single_item_match = (product_name, unit_price)
+                    break
+
+        if full_order_match:
+            total_unit = order_total or 1.0
             child_splits = []
             for product_name, unit_price in items:
                 share = (unit_price / total_unit) if total_unit else (1.0 / max(len(items), 1))
@@ -175,16 +277,23 @@ def enrich_with_amazon(
                     "notes": product_name,
                     "amount": round(parent_amount * share, 2),
                 })
-            # Adjust last child to absorb rounding drift so children sum exactly to parent
             if child_splits:
                 diff = round(parent_amount - sum(c["amount"] for c in child_splits), 2)
                 child_splits[-1]["amount"] = round(child_splits[-1]["amount"] + diff, 2)
             splits_to_apply.append((tx_id, child_splits))
+        elif single_item_match is not None:
+            partial_shipment += 1
+            product_name, _ = single_item_match
+            name = _truncate(product_name)
+            if old_notes.startswith(name):
+                skipped += 1
+                continue
+            note_updates[tx_id] = f"{name} | {old_notes}" if old_notes else name
         else:
-            # Single-item order → prepend product to notes
-            name = product_names
-            if len(name) > 120:
-                name = name[:117] + "..."
+            # Single-item order OR fully ambiguous → prepend all product names
+            if item_count > 1:
+                unreconciled += 1
+            name = _truncate(product_names)
             if old_notes.startswith(name):
                 skipped += 1
                 continue
@@ -213,6 +322,8 @@ def enrich_with_amazon(
         "skipped": skipped,
         "split": len(splits_to_apply),
         "children": total_children,
+        "partial_shipment": partial_shipment,
+        "unreconciled": unreconciled,
         "total_amazon": len(amazon_df),
     }
     _record_enrichment_history(data_dir, file_path, "amazon", stats)
@@ -415,12 +526,24 @@ def _preview_amazon(txn_df: pl.DataFrame, file_path: str | Path, limit: int) -> 
     for row in enriched.head(limit).iter_rows(named=True):
         product_names = row["product_names"] or ""
         item_count = row["item_count"] or 0
+        order_total = float(row["total_price"] or 0.0)
+        parent_amount = float(row["amount"] or 0.0)
+        will_split = (
+            item_count > 1
+            and order_total > 0
+            and abs(abs(parent_amount) - order_total) <= 1.0
+        )
         if len(product_names) > 120:
             product_names = product_names[:117] + "..."
         old_notes = row["notes"] or ""
         already_enriched = old_notes.startswith(product_names)
-        if item_count > 1:
+        if will_split:
             new_notes = f"→ split into {item_count} items: {product_names}"
+        elif item_count > 1:
+            new_notes = (
+                f"→ partial shipment (order total €{order_total:.2f} ≠ €{abs(parent_amount):.2f}); "
+                f"no split. Items: {product_names}"
+            )
         else:
             new_notes = old_notes if already_enriched else (
                 f"{product_names} | {old_notes}" if old_notes else product_names
@@ -434,7 +557,7 @@ def _preview_amazon(txn_df: pl.DataFrame, file_path: str | Path, limit: int) -> 
             "new_notes": new_notes,
             "amount": row["amount"],
             "already_enriched": already_enriched,
-            "will_split": item_count > 1,
+            "will_split": will_split,
             "item_count": int(item_count) if item_count else 0,
         })
 
