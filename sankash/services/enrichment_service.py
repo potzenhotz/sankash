@@ -2,9 +2,57 @@
 
 import re
 from datetime import timedelta
+from itertools import combinations
 from pathlib import Path
 
 import polars as pl
+
+
+# German VAT rates that Amazon applies on top of CSV net unit prices.
+# 1.0 covers items that are already tax-inclusive in the export.
+_AMAZON_VAT_FACTORS: tuple[float, ...] = (1.0, 1.07, 1.19)
+
+
+def _find_matching_subset(
+    items: list[tuple[str, float]],
+    target: float,
+    tolerance: float = 1.0,
+) -> tuple[tuple[int, ...], float] | None:
+    """Find a subset of ``items`` whose net-sum × a German VAT rate ≈ ``target``.
+
+    Amazon DE exports list unit prices net; bank charges arrive gross (× 1.19 for
+    most goods, × 1.07 for books, occasionally × 1.0 if the CSV is already gross
+    or the order included a voucher). A single bank charge can also cover several
+    items shipped together, so we search subsets — not just single items.
+
+    Args:
+        items: list of (product_name, unit_price_net) for the remaining items of
+            the order that have not been consumed by an earlier matched charge.
+        target: absolute bank-charge amount to match.
+        tolerance: acceptable EUR drift for shipping/rounding (default €1).
+
+    Returns:
+        ``(indices_into_items, vat_factor)`` for the best match, or None.
+        Indices are returned (not items) so callers can also remove the matched
+        items from the remaining-pool. Search is preempted on a near-exact hit
+        (<1¢ drift) to keep large orders cheap.
+    """
+    n = len(items)
+    if n == 0:
+        return None
+    best: tuple[tuple[int, ...], float] | None = None
+    best_diff = float("inf")
+    for r in range(1, n + 1):
+        for combo in combinations(range(n), r):
+            net_sum = sum(items[i][1] for i in combo)
+            for vat in _AMAZON_VAT_FACTORS:
+                diff = abs(net_sum * vat - target)
+                if diff <= tolerance and diff < best_diff:
+                    best = (combo, vat)
+                    best_diff = diff
+                    if diff < 0.01:
+                        return best
+    return best
 
 from sankash.core.models import ImportHistory
 from sankash.core.storage import read_parquet, write_parquet
@@ -225,20 +273,26 @@ def enrich_with_amazon(
     splits_to_apply: list[tuple[int, list[dict]]] = []
     skipped = 0
 
-    # Amazon ships multi-item orders in pieces, producing one bank charge per
-    # shipment (or per item). Reconciliation strategy per bank charge:
-    #   1. parent_amount ≈ full order total          → split into all items
-    #   2. parent_amount ≈ exactly one item's price  → enrich notes with that item only
-    #   3. neither                                    → unreconciled; prepend all
-    #      product names so the user can categorize manually.
+    # Reconcile each bank charge to a SUBSET of order items × German VAT.
+    # Track remaining items per order so two charges in the same order don't
+    # claim the same item. Process larger charges first — big-ticket items are
+    # less ambiguous, leaving the small remainder for smaller charges.
     RECONCILE_TOLERANCE_EUR = 1.0
     unreconciled = 0
     partial_shipment = 0
+    multi_item_match = 0
 
     def _truncate(s: str) -> str:
         return s if len(s) <= 120 else s[:117] + "..."
 
-    for row in matched.iter_rows(named=True):
+    matched_rows = matched.sort("amount").to_dicts()  # negative amounts; smallest first = largest absolute last
+    matched_rows.sort(key=lambda r: abs(float(r["amount"] or 0)), reverse=True)
+
+    remaining_items: dict[str, list[tuple[str, float]]] = {
+        k: list(v) for k, v in items_by_order.items()
+    }
+
+    for row in matched_rows:
         tx_id = row["id"]
         if tx_id in already_split_ids:
             skipped += 1
@@ -249,55 +303,72 @@ def enrich_with_amazon(
         product_names = row["product_names"] or ""
         old_notes = row["notes"] or ""
         parent_amount = float(row["amount"])
-        items = items_by_order.get(order_id, [])
-        order_total = sum(p for _, p in items)
         abs_parent = abs(parent_amount)
+        items_left = remaining_items.get(order_id, [])
 
-        # Case 1: full order charged at once → split into all items
-        full_order_match = (
-            item_count > 1
-            and order_total > 0
-            and abs(abs_parent - order_total) <= RECONCILE_TOLERANCE_EUR
+        # Subset-sum match across remaining items × VAT rates
+        subset_match = _find_matching_subset(items_left, abs_parent, RECONCILE_TOLERANCE_EUR)
+
+        chosen_label = "UNRECONCILED"
+        if subset_match is not None:
+            indices, vat = subset_match
+            chosen_items = [items_left[i] for i in indices]
+            if len(chosen_items) == 1:
+                chosen_label = f"SINGLE×{vat:.2f}={chosen_items[0][0][:30]}"
+            else:
+                chosen_label = (
+                    f"SPLIT×{vat:.2f}={[n[:20] for n, _ in chosen_items]}"
+                )
+        elif item_count == 1 and items_left:
+            chosen_label = f"FALLBACK_SINGLE={items_left[0][0][:30]}"
+
+        print(
+            f"[enrich] tx_id={tx_id} order={order_id} parent={abs_parent:.2f} "
+            f"items_left={[(n[:25], round(p, 2)) for n, p in items_left]} → {chosen_label}",
+            flush=True,
         )
 
-        # Case 2: single-item shipment of a multi-item order — bank charge matches one item
-        single_item_match: tuple[str, float] | None = None
-        if not full_order_match and item_count > 1:
-            for product_name, unit_price in items:
-                if unit_price and abs(abs_parent - unit_price) <= RECONCILE_TOLERANCE_EUR:
-                    single_item_match = (product_name, unit_price)
-                    break
+        if subset_match is not None:
+            indices, _vat = subset_match
+            chosen_items = [items_left[i] for i in indices]
+            # Remove consumed items from the order's remaining pool
+            remaining_items[order_id] = [
+                it for i, it in enumerate(items_left) if i not in indices
+            ]
 
-        if full_order_match:
-            total_unit = order_total or 1.0
-            child_splits = []
-            for product_name, unit_price in items:
-                share = (unit_price / total_unit) if total_unit else (1.0 / max(len(items), 1))
-                child_splits.append({
-                    "notes": product_name,
-                    "amount": round(parent_amount * share, 2),
-                })
-            if child_splits:
-                diff = round(parent_amount - sum(c["amount"] for c in child_splits), 2)
-                child_splits[-1]["amount"] = round(child_splits[-1]["amount"] + diff, 2)
-            splits_to_apply.append((tx_id, child_splits))
-        elif single_item_match is not None:
-            partial_shipment += 1
-            product_name, _ = single_item_match
-            name = _truncate(product_name)
-            if old_notes.startswith(name):
-                skipped += 1
-                continue
-            note_updates[tx_id] = f"{name} | {old_notes}" if old_notes else name
-        else:
-            # Single-item order OR fully ambiguous → prepend all product names
-            if item_count > 1:
-                unreconciled += 1
-            name = _truncate(product_names)
-            if old_notes.startswith(name):
-                skipped += 1
-                continue
-            note_updates[tx_id] = f"{name} | {old_notes}" if old_notes else name
+            if len(chosen_items) == 1:
+                partial_shipment += 1
+                name = _truncate(chosen_items[0][0])
+                if old_notes.startswith(name):
+                    skipped += 1
+                    continue
+                note_updates[tx_id] = f"{name} | {old_notes}" if old_notes else name
+            else:
+                multi_item_match += 1
+                # Split this bank charge across the matched subset, pro-rated by
+                # the items' net prices so children sum exactly to parent_amount.
+                total_net = sum(p for _, p in chosen_items) or 1.0
+                child_splits = []
+                for product_name, unit_price in chosen_items:
+                    share = unit_price / total_net
+                    child_splits.append({
+                        "notes": product_name,
+                        "amount": round(parent_amount * share, 2),
+                    })
+                drift = round(parent_amount - sum(c["amount"] for c in child_splits), 2)
+                child_splits[-1]["amount"] = round(child_splits[-1]["amount"] + drift, 2)
+                splits_to_apply.append((tx_id, child_splits))
+            continue
+
+        # Fallback: no subset matched → prepend all product names (or just the
+        # lone item for a single-item order) so user can categorize manually.
+        if item_count > 1:
+            unreconciled += 1
+        name = _truncate(product_names if item_count > 1 else (items_left[0][0] if items_left else product_names))
+        if old_notes.startswith(name):
+            skipped += 1
+            continue
+        note_updates[tx_id] = f"{name} | {old_notes}" if old_notes else name
 
     # Apply notes updates to single-item orders
     if note_updates:
@@ -323,6 +394,7 @@ def enrich_with_amazon(
         "split": len(splits_to_apply),
         "children": total_children,
         "partial_shipment": partial_shipment,
+        "multi_item_match": multi_item_match,
         "unreconciled": unreconciled,
         "total_amazon": len(amazon_df),
     }
