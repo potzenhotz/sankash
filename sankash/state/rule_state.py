@@ -36,7 +36,7 @@ class RuleState(BaseState):
 
     # Per-transaction AI / manual rule creation state
     ai_suggesting_payee: str = ""        # which payee is currently loading/showing
-    ai_suggesting_tx_id: str = ""        # which specific transaction row is open
+    ai_suggesting_tx_id: int = 0         # which specific transaction row is open (0 = none)
     ai_suggesting_provider: str = ""     # "apfel" or "openrouter"
     ai_loading: bool = False
     ai_error: str = ""
@@ -312,7 +312,7 @@ class RuleState(BaseState):
 
     # --- Manual rule creation from uncategorized panel ---
 
-    def start_manual_rule(self, payee: str, tx_id: str = "") -> None:
+    def start_manual_rule(self, payee: str, tx_id: int = 0) -> None:
         """Open inline rule editor for a transaction, pre-filled with its payee."""
         self._clear_ai_state()
         self.ai_suggesting_payee = payee
@@ -435,7 +435,7 @@ class RuleState(BaseState):
                 settings_service.get_setting(self.data_dir, "openai_api_key", "") or None,
             )
 
-    def request_ai_suggestion(self, payee: str, provider: str, tx_id: str = ""):
+    def request_ai_suggestion(self, payee: str, provider: str, tx_id: int = 0):
         """Request AI category suggestion for a single transaction."""
         self._clear_ai_state()
         self.ai_suggesting_payee = payee
@@ -512,8 +512,23 @@ class RuleState(BaseState):
 
     def update_ai_match_field(self, field: str) -> None:
         """User overrides the AI-suggested match field."""
-        if field in ("payee", "notes"):
-            self.ai_match_field = field
+        if field not in ("payee", "notes"):
+            return
+        self.ai_match_field = field
+        # Auto-fill value from the transaction so user does not have to retype.
+        # Only overwrite when current value still matches the *other* field's
+        # value (i.e., user hasn't already customized it).
+        tx = next(
+            (t for t in self.uncategorized_transactions
+             if t.get("id") == self.ai_suggesting_tx_id),
+            None,
+        )
+        if tx is None:
+            return
+        new_value = (tx.get(field) or "").strip()
+        other_value = (tx.get("notes" if field == "payee" else "payee") or "").strip()
+        if not self.ai_match_value or self.ai_match_value == other_value:
+            self.ai_match_value = new_value
 
     def update_ai_match_value(self, value: str) -> None:
         """User overrides the AI-suggested match value."""
@@ -572,7 +587,7 @@ class RuleState(BaseState):
     def _clear_ai_state(self) -> None:
         """Reset all per-transaction AI state."""
         self.ai_suggesting_payee = ""
-        self.ai_suggesting_tx_id = ""
+        self.ai_suggesting_tx_id = 0
         self.ai_suggesting_provider = ""
         self.ai_loading = False
         self.ai_error = ""
