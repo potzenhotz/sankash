@@ -207,8 +207,27 @@ def prepare_sankey_data(df: pl.DataFrame) -> dict:
                     "value": abs(float(row["total"])),
                 })
 
+    # Each node now carries kind ("income" | "account" | "expense") and the
+    # original name. The label is suffixed when needed to disambiguate the
+    # common cases of a category name colliding with an account name, or the
+    # same category appearing on both income and expense sides (e.g.
+    # "Nebenkosten" with refunds). The click handler uses ``kind`` + ``name``
+    # to route to the correct filter (by account vs. by category sign).
+    nodes_out: list[dict] = []
+    for key, label in zip(node_keys, node_labels):
+        if key.startswith("inc_"):
+            kind, name = "income", key[4:]
+            visible = label
+        elif key.startswith("acc_"):
+            kind, name = "account", key[4:]
+            visible = f"{label} (Konto)"
+        else:
+            kind, name = "expense", key[4:]
+            visible = label
+        nodes_out.append({"label": visible, "kind": kind, "name": name})
+
     return {
-        "nodes": [{"label": label} for label in node_labels],
+        "nodes": nodes_out,
         "links": links,
     }
 

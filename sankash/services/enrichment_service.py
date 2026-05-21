@@ -40,9 +40,19 @@ def _find_matching_subset(
     n = len(items)
     if n == 0:
         return None
+    # Prefer the full set when it explains the charge — "one bank charge =
+    # whole order" is the common case. Without this bias, a single item whose
+    # gross price happens to land closer to the target than the full sum would
+    # wrongly win and leave the other items unassigned.
+    full_indices = tuple(range(n))
+    full_net = sum(p for _, p in items)
+    for vat in _AMAZON_VAT_FACTORS:
+        if abs(full_net * vat - target) <= tolerance:
+            return (full_indices, vat)
+    # Fall back to proper subsets for partial shipments.
     best: tuple[tuple[int, ...], float] | None = None
     best_diff = float("inf")
-    for r in range(1, n + 1):
+    for r in range(1, n):
         for combo in combinations(range(n), r):
             net_sum = sum(items[i][1] for i in combo)
             for vat in _AMAZON_VAT_FACTORS:
@@ -146,9 +156,16 @@ def parse_amazon_csv_items(file_path: str | Path) -> pl.DataFrame:
 
     Returns DataFrame with columns: order_id, product_name, unit_price.
 
-    ``unit_price`` is the per-line total used for pro-rating splits. It prefers
-    "Item Total" / "Item Subtotal" when present (these already include the
-    purchased quantity); otherwise falls back to "Unit Price" × "Quantity".
+    ``unit_price`` is the per-line GROSS total (incl. VAT, qty applied), used
+    both for subset-sum reconciliation against bank charges and for pro-rating
+    splits. Strategy, in order of preference:
+
+      1. Pre-computed line-total column (e.g. "Item Total" — gross, qty-applied).
+      2. ("Unit Price" + "Unit Price Tax") × quantity — handles orders with
+         mixed VAT rates per item (food 7% + supplements/goods 19%), where a
+         single order-wide VAT factor cannot reconcile the bank charge.
+      3. "Unit Price" × quantity (net only) — older exports without tax column;
+         the subset matcher will then sweep VAT factors.
     """
     df = pl.read_csv(
         file_path,
@@ -158,11 +175,11 @@ def parse_amazon_csv_items(file_path: str | Path) -> pl.DataFrame:
     )
 
     columns = set(df.columns)
-    # Pick the best line-total column available in this export variant
     total_col_candidates = ["Item Total", "Item Subtotal", "Purchase Price Per Unit"]
     line_total_col = next((c for c in total_col_candidates if c in columns), None)
-    has_qty = "Quantity" in columns
+    qty_col = next((c for c in ("Original Quantity", "Quantity") if c in columns), None)
     has_unit_price = "Unit Price" in columns
+    has_unit_tax = "Unit Price Tax" in columns
 
     rows = df.to_dicts()
     out: list[dict] = []
@@ -171,13 +188,18 @@ def parse_amazon_csv_items(file_path: str | Path) -> pl.DataFrame:
         if line_total_col:
             line_total = _parse_money_to_float(r.get(line_total_col))
         if line_total is None and has_unit_price:
-            unit = _parse_money_to_float(r.get("Unit Price"))
-            qty_raw = r.get("Quantity") if has_qty else 1
+            unit_net = _parse_money_to_float(r.get("Unit Price"))
+            unit_tax = _parse_money_to_float(r.get("Unit Price Tax")) if has_unit_tax else None
+            qty_raw = r.get(qty_col) if qty_col else 1
             try:
                 qty = int(qty_raw) if qty_raw not in (None, "") else 1
             except (ValueError, TypeError):
                 qty = 1
-            line_total = (unit or 0.0) * qty if unit is not None else None
+            if unit_net is not None:
+                # Add per-unit tax when available — preserves per-item VAT and
+                # makes line totals gross, so the subset matcher hits at VAT=1.0
+                # even for orders mixing 7% / 19% items.
+                line_total = (unit_net + (unit_tax or 0.0)) * qty
         out.append({
             "order_id": r.get("Order ID"),
             "product_name": r.get("Product Name"),

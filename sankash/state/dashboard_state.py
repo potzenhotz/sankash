@@ -303,17 +303,30 @@ class DashboardState(BaseState):
         self.load_dashboard()
 
     def select_detail_category(self, category: str) -> None:
-        """Load transactions for a selected category."""
+        """Load transactions for a selected category (legacy entry point).
+
+        Kept for the close-button (``select_detail_category("")``) and any
+        callers that only know a category name. Defaults to filtering by
+        category across both signs.
+        """
+        self._load_detail(category, kind="category", sign=None)
+
+    def _load_detail(self, label: str, kind: str, sign: str | None) -> None:
+        """Load detail panel transactions.
+
+        kind: "category" (filter by category name), "income" (category + amount>0),
+              "expense" (category + amount<0), "account" (filter by account name).
+        sign: ">0", "<0", or None — only applied when kind in {"income", "expense"}.
+        """
         import polars as pl
 
-        if not category or category == self.selected_detail_category:
-            # Toggle off if clicking same category
+        if not label or label == self.selected_detail_category:
             self.selected_detail_category = ""
             self.detail_transactions = []
             self.detail_total = 0.0
             return
 
-        self.selected_detail_category = category
+        self.selected_detail_category = label
 
         try:
             start = date.fromisoformat(self.start_date)
@@ -324,39 +337,94 @@ class DashboardState(BaseState):
                 self.data_dir, start, end, account_ids=account_ids,
             )
 
-            if not df.is_empty():
-                filtered = df.filter(pl.col("category") == category)
-                filtered = filtered.sort("date", descending=True)
-
-                # Ensure notes column exists
-                if "notes" not in filtered.columns:
-                    filtered = filtered.with_columns(pl.lit("").alias("notes"))
-
-                filtered = filtered.select(
-                    [c for c in ["date", "payee", "amount", "notes"] if c in filtered.columns]
-                )
-
-                self.detail_transactions = filtered.to_dicts()
-                self.detail_total = float(filtered["amount"].sum())
-            else:
+            if df.is_empty():
                 self.detail_transactions = []
                 self.detail_total = 0.0
+                return
+
+            if kind == "account":
+                filtered = df.filter(pl.col("account_name") == label)
+            else:
+                filtered = df.filter(pl.col("category") == label)
+                if sign == ">0":
+                    filtered = filtered.filter(pl.col("amount") > 0)
+                elif sign == "<0":
+                    filtered = filtered.filter(pl.col("amount") < 0)
+
+            filtered = filtered.sort("date", descending=True)
+            if "notes" not in filtered.columns:
+                filtered = filtered.with_columns(pl.lit("").alias("notes"))
+            filtered = filtered.select(
+                [c for c in ["date", "payee", "amount", "notes"] if c in filtered.columns]
+            )
+
+            self.detail_transactions = filtered.to_dicts()
+            self.detail_total = float(filtered["amount"].sum()) if not filtered.is_empty() else 0.0
         except Exception:
             self.detail_transactions = []
             self.detail_total = 0.0
 
     def handle_sankey_click(self, points: list[dict]) -> None:
-        """Handle click on a Sankey node to drill into that category."""
+        """Handle click on a Sankey node or link to drill into that flow.
+
+        Reflex's plotly wrapper strips ``label``/``source``/``target`` from
+        Plotly's click payload (see its ``extractPoints``), but the surviving
+        ``x``/``y`` fields discriminate: Plotly populates them only for node
+        rectangles, not for link stripes. So:
+
+        - ``x`` present → ``pointNumber`` indexes ``sankey_nodes`` (node click)
+        - ``x`` absent  → ``pointNumber`` indexes ``sankey_links`` (link click);
+          resolve to the non-account endpoint of that flow.
+
+        Verified against ground-truth click pairs on both income/expense sides
+        and the middle account node.
+        """
         try:
             if not points:
                 return
-            point = points[0]
-            # Use pointNumber to look up the node label from sankey_nodes
-            point_number = point.get("pointNumber")
-            if point_number is not None and point_number < len(self.sankey_nodes):
-                label = self.sankey_nodes[point_number]["label"]
-                if label in self.all_categories:
-                    self.select_detail_category(label)
+            p = points[0]
+            pn = p.get("pointNumber")
+            if pn is None:
+                return
+
+            is_node_click = p.get("x") is not None
+
+            node: dict | None = None
+            if is_node_click:
+                if 0 <= pn < len(self.sankey_nodes):
+                    node = self.sankey_nodes[pn]
+            else:
+                if 0 <= pn < len(self.sankey_links):
+                    link = self.sankey_links[pn]
+                    src_idx = link.get("source")
+                    tgt_idx = link.get("target")
+                    src = (
+                        self.sankey_nodes[src_idx]
+                        if isinstance(src_idx, int) and 0 <= src_idx < len(self.sankey_nodes)
+                        else None
+                    )
+                    tgt = (
+                        self.sankey_nodes[tgt_idx]
+                        if isinstance(tgt_idx, int) and 0 <= tgt_idx < len(self.sankey_nodes)
+                        else None
+                    )
+                    # Drill into the non-account end of the flow.
+                    node = (tgt if src and src.get("kind") == "account" else src) or tgt
+
+            if not node:
+                return
+            kind = node.get("kind")
+            name = node.get("name") or node.get("label", "")
+            if not name:
+                return
+            if kind == "account":
+                self._load_detail(name, kind="account", sign=None)
+            elif kind == "income":
+                self._load_detail(name, kind="income", sign=">0")
+            elif kind == "expense":
+                self._load_detail(name, kind="expense", sign="<0")
+            else:
+                self._load_detail(name, kind="category", sign=None)
         except Exception:
             pass
 
