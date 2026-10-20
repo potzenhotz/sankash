@@ -104,3 +104,20 @@ def test_filter_transactions_by_date(test_data_dir: str) -> None:
 
     assert count == 1
     assert df["date"][0] == date(2024, 1, 15)
+
+
+def test_account_balance_ignores_split_children(test_data_dir: str) -> None:
+    """Splitting a transaction must not change the account balance."""
+    account_id = account_service.create_account(test_data_dir, Account(name="Giro", bank="Bank"))
+    parent_id = transaction_service.create_transaction(
+        test_data_dir,
+        Transaction(account_id=account_id, date=date(2024, 1, 1), payee="Amazon", amount=-30.0),
+    )
+    transaction_service.split_transaction(
+        test_data_dir, parent_id, [{"notes": "Book", "amount": -10.0}, {"notes": "Cable", "amount": -20.0}]
+    )
+
+    assert account_service.calculate_account_balance(test_data_dir, account_id) == -30.0
+    balances = account_service.get_accounts_with_balances(test_data_dir)
+    assert balances["balance"][0] == -30.0
+    assert balances["transaction_count"][0] == 1

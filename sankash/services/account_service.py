@@ -39,9 +39,17 @@ def get_account_by_id(data_dir: str, account_id: int) -> pl.DataFrame:
     return df.filter(pl.col("id") == account_id)
 
 
+def _bank_rows(data_dir: str) -> pl.DataFrame:
+    """Transactions as booked by the bank: split children excluded (parents hold the total)."""
+    txns = read_parquet(data_dir, "transactions")
+    if "parent_id" in txns.columns:
+        txns = txns.filter(pl.col("parent_id").is_null())
+    return txns
+
+
 def calculate_account_balance(data_dir: str, account_id: int) -> float:
     """Calculate account balance from transactions."""
-    txns = read_parquet(data_dir, "transactions")
+    txns = _bank_rows(data_dir)
     if txns.is_empty():
         return 0.0
     filtered = txns.filter(pl.col("account_id") == account_id)
@@ -57,7 +65,7 @@ def get_accounts_with_balances(data_dir: str) -> pl.DataFrame:
         return pl.DataFrame()
 
     accounts_df = pl.DataFrame(accounts)
-    txns = read_parquet(data_dir, "transactions")
+    txns = _bank_rows(data_dir)
 
     if txns.is_empty():
         return accounts_df.with_columns(
