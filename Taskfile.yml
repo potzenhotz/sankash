@@ -40,10 +40,11 @@ tasks:
       - uv run reflex run
 
   test:
-    desc: Python tests and frontend typecheck
+    desc: Python tests, frontend tests and typecheck
     deps: [web:install]
     cmds:
       - uv run pytest -q
+      - npm --prefix web test
       - npm --prefix web run typecheck
 
   build:

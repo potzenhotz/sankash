@@ -100,7 +100,12 @@ reflex run
 
 ## New frontend (in progress)
 
-A React frontend (`web/`) is replacing the Reflex pages one by one. It talks to a FastAPI layer (`sankash/api/`) over the same services. So far it covers the transactions page with keyboard categorization (`Enter` category, `n` rule, `r` reset to rule, `u` uncategorized only, `/` search).
+A React frontend (`web/`) is replacing the Reflex pages one by one. It talks to a FastAPI layer (`sankash/api/`) over the same services. So far it covers:
+
+- **Dashboard**: money-flow Sankey (income categories → accounts → expense categories, click to list transactions), income/expense bars, period/account filters, category exclusion, grouping by parent category
+- **Transactions**: keyboard categorization (`Enter` category, `n` rule, `r` reset to rule, `u` uncategorized only, `/` search)
+
+Rules, categories, import, accounts and settings are still in the Reflex app (`task reflex`).
 
 ```bash
 task dev      # API on :8001 + frontend on http://localhost:5173, Ctrl+C stops both

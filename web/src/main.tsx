@@ -3,14 +3,14 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./styles.css";
-import { TransactionsPage } from "./TransactionsPage";
+import { App } from "./App";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <TransactionsPage />
+      <App />
     </QueryClientProvider>
   </StrictMode>,
 );
