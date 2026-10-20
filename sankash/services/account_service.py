@@ -6,9 +6,7 @@ import polars as pl
 
 from sankash.core.models import Account
 from sankash.core.storage import (
-    merge_overrides,
     next_id,
-    read_overrides,
     read_parquet,
     read_yaml,
     write_yaml,
@@ -46,8 +44,6 @@ def calculate_account_balance(data_dir: str, account_id: int) -> float:
     txns = read_parquet(data_dir, "transactions")
     if txns.is_empty():
         return 0.0
-    overrides = read_overrides(data_dir)
-    txns = merge_overrides(txns, overrides)
     filtered = txns.filter(pl.col("account_id") == account_id)
     if filtered.is_empty():
         return 0.0
@@ -68,9 +64,6 @@ def get_accounts_with_balances(data_dir: str) -> pl.DataFrame:
             pl.lit(0.0).alias("balance"),
             pl.lit(0).cast(pl.Int64).alias("transaction_count"),
         ).sort("name")
-
-    overrides = read_overrides(data_dir)
-    txns = merge_overrides(txns, overrides)
 
     balances = txns.group_by("account_id").agg(
         pl.col("amount").sum().alias("balance"),

@@ -46,7 +46,9 @@ data/
 - **YAML** for config data (human-readable, version-controllable)
 - **JSON** for structured runtime data
 
-Transactions are append-only. Categorization and other edits go into `transaction_overrides.json`, which is merged at read time. This means re-importing CSVs never overwrites your categorization work.
+Transactions are append-only. Manual categorizations and other edits go into `transaction_overrides.json`, which is merged at read time. This means re-importing CSVs never overwrites your categorization work.
+
+Rule results are never stored: every read derives the category as "manual assignment if present, otherwise the first matching active rule by priority". New or edited rules therefore apply to all transactions immediately, with no "apply" step.
 
 ### Directory Structure
 

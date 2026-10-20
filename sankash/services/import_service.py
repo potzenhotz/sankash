@@ -22,6 +22,7 @@ from sankash.services.import_history_service import (
     check_duplicate_file,
     create_import_history,
 )
+from sankash.services.transaction_service import load_transactions
 from sankash.utils.duplicate_detection import find_duplicates
 
 
@@ -235,9 +236,10 @@ def import_transactions(
     if imported_count > 0:
         append_parquet(data_dir, "transactions", insert_df)
 
-    # Apply rules to newly imported transactions
-    from sankash.services.rule_service import apply_rules_to_uncategorized
-    categorized_count = apply_rules_to_uncategorized(data_dir)
+    # Rules apply at read time; count how many new rows they already categorize
+    categorized_count = load_transactions(data_dir).filter(
+        (pl.col("import_session_id") == import_session_id) & pl.col("is_categorized")
+    ).height
 
     # Update import history with categorized count
     records = read_json(data_dir, "import_history")

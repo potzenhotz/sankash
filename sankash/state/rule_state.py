@@ -82,6 +82,9 @@ class RuleState(BaseState):
                             "priority": rule.get("priority", 0),
                         }
 
+            # Load once; each rule's match count is a filter over the same frame
+            txns, _ = transaction_service.get_transactions(self.data_dir, limit=100_000)
+
             # Build one row per category
             category_rules = []
             for cat in all_cats:
@@ -94,9 +97,8 @@ class RuleState(BaseState):
 
                 # Count matches
                 match_count = 0
-                if conditions:
+                if conditions and not txns.is_empty():
                     try:
-                        from sankash.core.models import Rule, RuleAction
                         parsed = Rule(
                             name=cat_name,
                             priority=rule_info.get("priority", 0),
@@ -105,7 +107,7 @@ class RuleState(BaseState):
                             conditions=[RuleCondition(**c) for c in conditions],
                             actions=[RuleAction(action_type="set_category", value=cat_name)],
                         )
-                        match_count = rule_service.count_matching_transactions(self.data_dir, parsed)
+                        match_count = txns.filter(rule_service.rule_expr(parsed)).height
                     except Exception:
                         pass
 
@@ -322,30 +324,6 @@ class RuleState(BaseState):
         self.ai_match_value = payee
         self.ai_suggested_category = ""
 
-    # --- Apply rules ---
-
-    def apply_rules(self):
-        """Apply rules to uncategorized transactions."""
-        self.error = ""
-        self.success = ""
-        try:
-            count = rule_service.apply_rules_to_uncategorized(self.data_dir)
-            self.success = f"Categorized {count} transactions"
-        except Exception as e:
-            self.error = f"Failed to apply rules: {str(e)}"
-        return [RuleState.load_rules, RuleState.load_uncategorized]
-
-    def apply_rules_all(self):
-        """Re-apply all rules (rules dominate, manual fallback preserved)."""
-        self.error = ""
-        self.success = ""
-        try:
-            count = rule_service.apply_rules_to_all(self.data_dir)
-            self.success = f"Re-categorized {count} transactions"
-        except Exception as e:
-            self.error = f"Failed to apply rules: {str(e)}"
-        return [RuleState.load_rules, RuleState.load_uncategorized]
-
     # --- Apfel server management ---
 
     def start_apfel(self):
@@ -535,7 +513,7 @@ class RuleState(BaseState):
         self.ai_match_value = value
 
     def accept_ai_suggestion(self):
-        """Accept the current AI suggestion: create a rule and apply it."""
+        """Accept the current AI suggestion: add it as a rule condition."""
         if not self.ai_match_value or not self.ai_suggested_category:
             return
 
@@ -549,7 +527,6 @@ class RuleState(BaseState):
                 value=self.ai_match_value,
             )
             rule_service.add_condition_to_category(self.data_dir, actual_category, condition)
-            rule_service.apply_rules_to_uncategorized(self.data_dir)
             self.success = f"Rule: {self.ai_match_field} contains '{self.ai_match_value}' → {actual_category}"
             self._clear_ai_state()
         except Exception as e:
@@ -572,7 +549,7 @@ class RuleState(BaseState):
             ]
             if matching_ids:
                 transaction_service.bulk_update_categories(
-                    self.data_dir, matching_ids, actual_category, source="manual"
+                    self.data_dir, matching_ids, actual_category
                 )
             self.success = f"Categorized {len(matching_ids)} transaction(s) as {actual_category}"
             self._clear_ai_state()

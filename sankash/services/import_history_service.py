@@ -9,15 +9,14 @@ import polars as pl
 
 from sankash.core.models import ImportHistory
 from sankash.core.storage import (
-    merge_overrides,
     next_id,
     read_json,
-    read_overrides,
     read_parquet,
     read_yaml,
     write_json,
     write_parquet,
 )
+from sankash.services.transaction_service import load_transactions
 
 
 def calculate_file_hash(file_path: str | Path) -> str:
@@ -165,12 +164,9 @@ def delete_import_history(data_dir: str, import_id: int) -> bool:
 
 def get_transactions_by_import(data_dir: str, import_id: int) -> pl.DataFrame:
     """Get all transactions from a specific import session."""
-    txns = read_parquet(data_dir, "transactions")
+    txns = load_transactions(data_dir)
     if txns.is_empty() or "import_session_id" not in txns.columns:
         return pl.DataFrame()
-
-    overrides = read_overrides(data_dir)
-    txns = merge_overrides(txns, overrides)
 
     df = txns.filter(pl.col("import_session_id") == import_id)
 

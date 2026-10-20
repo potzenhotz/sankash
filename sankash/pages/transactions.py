@@ -558,14 +558,6 @@ def transactions_page() -> rx.Component:
                 rx.heading("Transaction Management", size="8"),
                 rx.spacer(),
                 rx.button(
-                    rx.icon("play", size=18),
-                    "Apply Rules",
-                    on_click=TransactionState.apply_rules,
-                    loading=TransactionState.loading,
-                    size="2",
-                    variant="soft",
-                ),
-                rx.button(
                     rx.icon("trash-2", size=18),
                     "Delete All",
                     on_click=TransactionState.open_delete_all_dialog,

@@ -6,14 +6,14 @@ import polars as pl
 
 from sankash.core.models import Category
 from sankash.core.storage import (
-    merge_overrides,
     next_id,
     read_overrides,
-    read_parquet,
     read_yaml,
     write_overrides,
     write_yaml,
 )
+from sankash.services import rule_service
+from sankash.services.transaction_service import load_transactions
 
 
 def get_categories(data_dir: str) -> pl.DataFrame:
@@ -43,16 +43,13 @@ def get_categories_with_spending(data_dir: str) -> pl.DataFrame:
         return pl.DataFrame()
 
     cats_df = pl.DataFrame(records)
-    txns = read_parquet(data_dir, "transactions")
+    txns = load_transactions(data_dir)
 
     if txns.is_empty():
         return cats_df.with_columns(
             pl.lit(0.0).alias("total_spending"),
             pl.lit(0).cast(pl.Int64).alias("transaction_count"),
         ).sort("total_spending", descending=True)
-
-    overrides = read_overrides(data_dir)
-    txns = merge_overrides(txns, overrides)
 
     spending = txns.filter(pl.col("category").is_not_null()).group_by("category").agg(
         pl.col("amount").abs().sum().alias("total_spending"),
@@ -121,11 +118,19 @@ def update_category(data_dir: str, category_id: int, category: Category) -> None
         if changed:
             write_overrides(data_dir, overrides)
 
+        rule_service.rename_category_in_rules(data_dir, old_name, category.name)
+
     write_yaml(data_dir, "categories", records)
 
 
+def _drop_manual_category(vals: dict) -> None:
+    """Remove a manual category assignment so rules apply again."""
+    for key in ("category", "is_categorized", "category_source"):
+        vals.pop(key, None)
+
+
 def delete_category(data_dir: str, category_id: int) -> None:
-    """Delete category (also uncategorizes related transactions)."""
+    """Delete category, its rule and manual assignments to it."""
     records = read_yaml(data_dir, "categories")
 
     # Find category name
@@ -141,11 +146,14 @@ def delete_category(data_dir: str, category_id: int) -> None:
         changed = False
         for tid, vals in overrides.items():
             if vals.get("category") == cat_name:
-                vals["category"] = None
-                vals["is_categorized"] = False
+                _drop_manual_category(vals)
                 changed = True
         if changed:
             write_overrides(data_dir, overrides)
+
+        rule = rule_service.get_rule_for_category(data_dir, cat_name)
+        if rule:
+            rule_service.delete_rule(data_dir, rule["id"])
 
     # Remove from records
     records = [r for r in records if r["id"] != category_id]
@@ -153,18 +161,13 @@ def delete_category(data_dir: str, category_id: int) -> None:
 
 
 def delete_all_categories(data_dir: str) -> None:
-    """Delete all categories and uncategorize all transactions."""
-    # Clear all category overrides
+    """Delete all categories and their rules, uncategorizing all transactions."""
     overrides = read_overrides(data_dir)
-    changed = False
-    for tid, vals in overrides.items():
-        if vals.get("category") is not None or vals.get("is_categorized"):
-            vals["category"] = None
-            vals["is_categorized"] = False
-            changed = True
-    if changed:
-        write_overrides(data_dir, overrides)
+    for vals in overrides.values():
+        _drop_manual_category(vals)
+    write_overrides(data_dir, overrides)
 
+    write_yaml(data_dir, "rules", [])
     write_yaml(data_dir, "categories", [])
 
 

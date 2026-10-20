@@ -5,7 +5,8 @@ from typing import Optional
 
 import polars as pl
 
-from sankash.core.storage import merge_overrides, read_overrides, read_parquet, read_yaml
+from sankash.core.storage import read_parquet, read_yaml
+from sankash.services.transaction_service import load_transactions
 
 
 def get_available_months(data_dir: str) -> pl.DataFrame:
@@ -37,14 +38,12 @@ def get_transactions_for_period(
     account_ids: Optional[list[int]] = None,
 ) -> pl.DataFrame:
     """Get all transactions for a time period with overrides merged."""
-    df = read_parquet(data_dir, "transactions")
+    df = load_transactions(data_dir)
     if df.is_empty():
         return pl.DataFrame()
 
-    # Backfill parent_id for old data, then drop split-parent rows so children
-    # are the only representation of those orders (no double-counting).
-    if "parent_id" not in df.columns:
-        df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("parent_id"))
+    # Drop split-parent rows so children are the only representation of those
+    # orders (no double-counting).
     parent_ids = (
         df.filter(pl.col("parent_id").is_not_null())
         .select("parent_id")
@@ -55,9 +54,6 @@ def get_transactions_for_period(
     parent_ids = [int(p) for p in parent_ids if p is not None]
     if parent_ids:
         df = df.filter(~pl.col("id").is_in(parent_ids))
-
-    overrides = read_overrides(data_dir)
-    df = merge_overrides(df, overrides)
 
     # Filter by date range
     df = df.filter(pl.col("date").is_between(start_date, end_date))

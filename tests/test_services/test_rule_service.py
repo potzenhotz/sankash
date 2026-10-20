@@ -2,10 +2,11 @@
 
 from datetime import date
 
-import pytest
+import polars as pl
 
-from sankash.core.models import Account, Rule, RuleAction, RuleCondition, Transaction
-from sankash.services import account_service, rule_service, transaction_service
+from sankash.core.models import Account, Category, Rule, RuleAction, RuleCondition, Transaction
+from sankash.core.storage import write_overrides
+from sankash.services import account_service, category_service, rule_service, transaction_service
 
 
 def _create_test_account(data_dir: str) -> int:
@@ -36,102 +37,126 @@ def test_create_and_get_rule(test_data_dir: str) -> None:
     assert df["name"][0] == "Grocery Rule"
 
 
-def test_evaluate_rule_contains(test_data_dir: str) -> None:
-    """Test rule evaluation with contains operator."""
+def _matches(rule: Rule, **row: object) -> bool:
+    """Evaluate a rule against a single transaction row."""
+    df = pl.DataFrame([{"payee": "", "notes": None, "amount": 0.0, **row}])
+    return df.select(rule_service.rule_expr(rule)).item()
+
+
+def test_rule_expr_contains() -> None:
+    """Contains is case-insensitive and matches substrings."""
     rule = Rule(
         name="Test",
-        conditions=[
-            RuleCondition(field="payee", operator="contains", value="amazon")
-        ],
-        actions=[
-            RuleAction(action_type="set_category", value="Shopping")
-        ]
+        conditions=[RuleCondition(field="payee", operator="contains", value="amazon")],
+        actions=[RuleAction(action_type="set_category", value="Shopping")],
     )
-
-    # Should match
-    transaction1 = Transaction(
-        account_id=1,
-        date=date(2024, 1, 1),
-        payee="Amazon.com",
-        amount=-50.0,
-    )
-    assert rule_service.evaluate_rule(rule, transaction1) is True
-
-    # Should not match
-    transaction2 = Transaction(
-        account_id=1,
-        date=date(2024, 1, 1),
-        payee="Walmart",
-        amount=-50.0,
-    )
-    assert rule_service.evaluate_rule(rule, transaction2) is False
+    assert _matches(rule, payee="Amazon.com") is True
+    assert _matches(rule, payee="Walmart") is False
 
 
-def test_evaluate_rule_amount(test_data_dir: str) -> None:
-    """Test rule evaluation with amount comparison."""
-    rule = Rule(
+def test_rule_expr_amount() -> None:
+    """Amount comparisons are numeric, including equals."""
+    less = Rule(
         name="Large Expense",
-        conditions=[
-            RuleCondition(field="amount", operator="<", value="-100")
-        ],
-        actions=[
-            RuleAction(action_type="set_category", value="Large Purchase")
-        ]
+        conditions=[RuleCondition(field="amount", operator="<", value="-100")],
     )
+    assert _matches(less, amount=-150.0) is True
+    assert _matches(less, amount=-50.0) is False
 
-    # Should match (amount is -150, less than -100)
-    transaction1 = Transaction(
-        account_id=1,
-        date=date(2024, 1, 1),
-        payee="Store",
-        amount=-150.0,
-    )
-    assert rule_service.evaluate_rule(rule, transaction1) is True
-
-    # Should not match
-    transaction2 = Transaction(
-        account_id=1,
-        date=date(2024, 1, 1),
-        payee="Store",
-        amount=-50.0,
-    )
-    assert rule_service.evaluate_rule(rule, transaction2) is False
+    equals = Rule(name="Exact", conditions=[RuleCondition(field="amount", operator="equals", value="-12,50")])
+    assert _matches(equals, amount=-12.5) is True
 
 
-def test_apply_rules_to_uncategorized(test_data_dir: str) -> None:
-    """Test applying rules to uncategorized transactions."""
-    _create_test_account(test_data_dir)
-
-    # Create rule
+def test_rule_expr_match_type_and_null_notes() -> None:
+    """'all' needs every condition; null notes never crash a contains check."""
     rule = Rule(
+        name="Both",
+        match_type="all",
+        conditions=[
+            RuleCondition(field="payee", operator="contains", value="paypal"),
+            RuleCondition(field="notes", operator="contains", value="spotify"),
+        ],
+    )
+    assert _matches(rule, payee="PayPal", notes="Spotify AB") is True
+    assert _matches(rule, payee="PayPal", notes=None) is False
+
+
+def _grocery_rule() -> Rule:
+    return Rule(
         name="Grocery Rule",
         priority=10,
-        conditions=[
-            RuleCondition(field="payee", operator="contains", value="grocery")
-        ],
-        actions=[
-            RuleAction(action_type="set_category", value="Groceries")
-        ]
+        conditions=[RuleCondition(field="payee", operator="contains", value="grocery")],
+        actions=[RuleAction(action_type="set_category", value="Groceries")],
     )
-    rule_service.create_rule(test_data_dir, rule)
 
-    # Create matching transaction
-    transaction = Transaction(
-        account_id=1,
-        date=date(2024, 1, 1),
-        payee="Whole Foods Grocery",
-        amount=-50.0,
+
+def _create_grocery_transaction(data_dir: str) -> int:
+    return transaction_service.create_transaction(
+        data_dir,
+        Transaction(account_id=1, date=date(2024, 1, 1), payee="Whole Foods Grocery", amount=-50.0),
     )
-    transaction_service.create_transaction(test_data_dir, transaction)
 
-    # Apply rules
-    categorized = rule_service.apply_rules_to_uncategorized(test_data_dir)
-    assert categorized == 1
 
-    # Verify transaction was categorized
+def test_rules_categorize_at_read_time(test_data_dir: str) -> None:
+    """Rules apply without an explicit apply step, also to existing transactions."""
+    _create_test_account(test_data_dir)
+    _create_grocery_transaction(test_data_dir)
+    rule_service.create_rule(test_data_dir, _grocery_rule())
+
     df, _ = transaction_service.get_transactions(test_data_dir)
     assert df["category"][0] == "Groceries"
     assert df["is_categorized"][0] is True
+
+
+def test_priority_and_manual_override(test_data_dir: str) -> None:
+    """Higher priority rule wins; a manual assignment wins over any rule."""
+    _create_test_account(test_data_dir)
+    tid = _create_grocery_transaction(test_data_dir)
+    rule_service.create_rule(test_data_dir, _grocery_rule())
+    rule_service.create_rule(test_data_dir, Rule(
+        name="Food",
+        priority=20,
+        conditions=[RuleCondition(field="payee", operator="contains", value="foods")],
+        actions=[RuleAction(action_type="set_category", value="Food")],
+    ))
+
+    df, _ = transaction_service.get_transactions(test_data_dir)
+    assert df["category"][0] == "Food"
+
+    transaction_service.update_transaction_category(test_data_dir, tid, "Gifts")
+    df, _ = transaction_service.get_transactions(test_data_dir)
+    assert df["category"][0] == "Gifts"
+
+
+def test_legacy_rule_overrides_are_ignored(test_data_dir: str) -> None:
+    """Old stored rule results must not freeze a category after the rule changes."""
+    _create_test_account(test_data_dir)
+    tid = _create_grocery_transaction(test_data_dir)
+    write_overrides(test_data_dir, {
+        str(tid): {"category": "Stale", "is_categorized": True, "category_source": "rule"},
+    })
+
+    df, _ = transaction_service.get_transactions(test_data_dir)
+    assert df["category"][0] is None
+    assert df["is_categorized"][0] is False
+
+
+def test_category_rename_and_delete_cascade_to_rules(test_data_dir: str) -> None:
+    """Renaming a category retargets its rule; deleting it removes the rule."""
+    _create_test_account(test_data_dir)
+    _create_grocery_transaction(test_data_dir)
+    cat_id = category_service.create_category(test_data_dir, Category(name="Groceries"))
+    rule_service.create_rule(test_data_dir, _grocery_rule())
+
+    category_service.update_category(test_data_dir, cat_id, Category(name="Supermarket"))
+    df, _ = transaction_service.get_transactions(test_data_dir)
+    assert df["category"][0] == "Supermarket"
+    assert rule_service.get_rule_for_category(test_data_dir, "Supermarket") is not None
+
+    category_service.delete_category(test_data_dir, cat_id)
+    df, _ = transaction_service.get_transactions(test_data_dir)
+    assert df["category"][0] is None
+    assert rule_service.get_rules(test_data_dir).is_empty()
 
 
 def test_add_condition_to_category(test_data_dir: str) -> None:

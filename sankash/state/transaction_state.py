@@ -275,20 +275,6 @@ class TransactionState(BaseState):
         self.current_page = 1
         self.load_transactions()
 
-    def apply_rules(self) -> None:
-        """Apply all active rules to uncategorized transactions."""
-        self.loading = True
-        self.error = ""
-        try:
-            count = rule_service.apply_rules_to_uncategorized(self.data_dir)
-            self.load_transactions()
-            if count == 0:
-                self.error = "No transactions matched any rules"
-        except Exception as e:
-            self.error = f"Failed to apply rules: {str(e)}"
-        finally:
-            self.loading = False
-
     # --- Rule Dialog Methods ---
 
     def open_rule_dialog(self, transaction_id: int) -> None:
@@ -411,7 +397,6 @@ class TransactionState(BaseState):
             )
 
             rule_service.create_rule(self.data_dir, rule)
-            rule_service.apply_rules_to_uncategorized(self.data_dir)
             self.close_rule_dialog()
             self.load_transactions()
         except Exception as e:

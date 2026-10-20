@@ -17,10 +17,11 @@ from sankash.core.storage import (
     write_overrides,
     write_parquet,
 )
+from sankash.services.rule_service import apply_rules, get_active_rules
 
 
-def _load_transactions(data_dir: str) -> pl.DataFrame:
-    """Load transactions with overrides merged."""
+def load_transactions(data_dir: str) -> pl.DataFrame:
+    """Load transactions with overrides merged and categories derived from rules."""
     df = read_parquet(data_dir, "transactions")
     if df.is_empty():
         return df
@@ -28,7 +29,7 @@ def _load_transactions(data_dir: str) -> pl.DataFrame:
     if "parent_id" not in df.columns:
         df = df.with_columns(pl.lit(None).cast(pl.Int64).alias("parent_id"))
     overrides = read_overrides(data_dir)
-    return merge_overrides(df, overrides)
+    return apply_rules(merge_overrides(df, overrides), get_active_rules(data_dir))
 
 
 def _parent_ids_with_children(df: pl.DataFrame) -> set[int]:
@@ -78,7 +79,7 @@ def get_transactions(
     Returns tuple of (Polars DataFrame, total_count) for paginated results.
     Includes import source information from import_history.
     """
-    df = _load_transactions(data_dir)
+    df = load_transactions(data_dir)
     if df.is_empty():
         return pl.DataFrame(), 0
 
@@ -145,7 +146,7 @@ def get_transactions(
 
 def get_uncategorized_count(data_dir: str) -> int:
     """Get count of uncategorized transactions (leaves only, excludes split parents)."""
-    df = _load_transactions(data_dir)
+    df = load_transactions(data_dir)
     if df.is_empty():
         return 0
     parent_ids = _parent_ids_with_children(df)
@@ -154,28 +155,20 @@ def get_uncategorized_count(data_dir: str) -> int:
     return len(df.filter(pl.col("is_categorized") == False))  # noqa: E712
 
 
-def update_transaction_category(
-    data_dir: str, transaction_id: int, category: str, source: str = "manual"
-) -> None:
-    """Update transaction category via overrides.
-
-    Args:
-        source: "manual" for user-set categories, "rule" for rule-applied.
-    """
+def update_transaction_category(data_dir: str, transaction_id: int, category: str) -> None:
+    """Manually assign a category via overrides (wins over rules)."""
     overrides = read_overrides(data_dir)
     tid = str(transaction_id)
     if tid not in overrides:
         overrides[tid] = {}
     overrides[tid]["category"] = category
     overrides[tid]["is_categorized"] = True
-    overrides[tid]["category_source"] = source
+    overrides[tid]["category_source"] = "manual"
     write_overrides(data_dir, overrides)
 
 
-def bulk_update_categories(
-    data_dir: str, transaction_ids: list[int], category: str, source: str = "manual"
-) -> None:
-    """Bulk update transaction categories via overrides."""
+def bulk_update_categories(data_dir: str, transaction_ids: list[int], category: str) -> None:
+    """Manually assign a category to several transactions via overrides."""
     overrides = read_overrides(data_dir)
     for tid_int in transaction_ids:
         tid = str(tid_int)
@@ -183,7 +176,7 @@ def bulk_update_categories(
             overrides[tid] = {}
         overrides[tid]["category"] = category
         overrides[tid]["is_categorized"] = True
-        overrides[tid]["category_source"] = source
+        overrides[tid]["category_source"] = "manual"
     write_overrides(data_dir, overrides)
 
 
@@ -280,39 +273,6 @@ def split_transaction(
     if new_rows:
         append_parquet(data_dir, "transactions", pl.DataFrame(new_rows))
     return new_ids
-
-
-def update_transaction(
-    data_dir: str,
-    transaction_id: int,
-    transaction: Transaction,
-) -> None:
-    """Update existing transaction. Rewrites parquet for core field changes."""
-    df = read_parquet(data_dir, "transactions")
-    if df.is_empty():
-        return
-
-    # Update the row in parquet for core fields
-    mask = pl.col("id") == transaction_id
-    df = df.with_columns(
-        pl.when(mask).then(pl.lit(transaction.account_id)).otherwise(pl.col("account_id")).alias("account_id"),
-        pl.when(mask).then(pl.lit(transaction.date)).otherwise(pl.col("date")).alias("date"),
-        pl.when(mask).then(pl.lit(transaction.payee)).otherwise(pl.col("payee")).alias("payee"),
-        pl.when(mask).then(pl.lit(transaction.notes)).otherwise(pl.col("notes")).alias("notes"),
-        pl.when(mask).then(pl.lit(transaction.amount)).otherwise(pl.col("amount")).alias("amount"),
-    )
-    write_parquet(data_dir, "transactions", df)
-
-    # Update override fields
-    overrides = read_overrides(data_dir)
-    tid = str(transaction_id)
-    if tid not in overrides:
-        overrides[tid] = {}
-    overrides[tid]["category"] = transaction.category
-    overrides[tid]["is_categorized"] = transaction.is_categorized
-    overrides[tid]["is_transfer"] = transaction.is_transfer
-    overrides[tid]["transfer_account_id"] = transaction.transfer_account_id
-    write_overrides(data_dir, overrides)
 
 
 def delete_transaction(data_dir: str, transaction_id: int) -> None:

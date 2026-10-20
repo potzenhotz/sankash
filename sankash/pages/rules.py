@@ -222,24 +222,6 @@ def rules_table() -> rx.Component:
                     border="none",
                     padding="0",
                 ),
-                rx.tooltip(
-                    rx.button(
-                        "Apply to Uncategorized",
-                        on_click=RuleState.apply_rules,
-                        size="2",
-                        color_scheme="green",
-                    ),
-                    content="Apply rules to uncategorized transactions",
-                ),
-                rx.tooltip(
-                    rx.button(
-                        "Apply to All",
-                        on_click=RuleState.apply_rules_all,
-                        size="2",
-                        color_scheme="blue",
-                    ),
-                    content="Re-apply all rules (rules dominate, manual preserved as fallback)",
-                ),
                 width="100%",
                 align="center",
                 spacing="2",

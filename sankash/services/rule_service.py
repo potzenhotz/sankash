@@ -1,12 +1,11 @@
 """Rule service with functional rule engine."""
 
 from datetime import datetime
-from typing import Any, Callable
 
 import polars as pl
 import yaml
 
-from sankash.core.models import Rule, RuleAction, RuleCondition, Transaction
+from sankash.core.models import Rule, RuleAction, RuleCondition
 from sankash.core.storage import next_id, read_yaml, write_yaml
 
 
@@ -47,162 +46,75 @@ def parse_rule_from_row(row: dict) -> Rule:
     )
 
 
-def create_condition_evaluator(condition: RuleCondition) -> Callable[[Transaction], bool]:
-    """Create a condition evaluator function (higher-order function)."""
+def _condition_expr(condition: RuleCondition) -> pl.Expr:
+    """Polars expression that is True where a transaction matches one condition."""
     field = condition.field
     operator = condition.operator
-    value = condition.value
+    if field not in ("payee", "notes", "amount"):
+        return pl.lit(False)
 
-    def evaluator(transaction: Transaction) -> bool:
-        if field == "payee":
-            field_value = transaction.payee
-        elif field == "amount":
-            field_value = str(transaction.amount)
-        elif field == "notes":
-            field_value = transaction.notes or ""
-        else:
-            return False
+    if operator in ("<", ">") or (field == "amount" and operator == "equals"):
+        try:
+            value = float(condition.value.replace(",", "."))
+        except ValueError:
+            return pl.lit(False)
+        number = pl.col(field).cast(pl.Float64, strict=False)
+        if operator == "<":
+            return number < value
+        if operator == ">":
+            return number > value
+        return number == value
 
-        if operator == "contains":
-            return value.lower() in field_value.lower()
-        elif operator == "equals":
-            return value.lower() == field_value.lower()
-        elif operator == "<":
-            try:
-                return float(field_value) < float(value)
-            except ValueError:
-                return False
-        elif operator == ">":
-            try:
-                return float(field_value) > float(value)
-            except ValueError:
-                return False
-        else:
-            return False
-
-    return evaluator
+    text = pl.col(field).cast(pl.Utf8).fill_null("").str.to_lowercase()
+    if operator == "contains":
+        return text.str.contains(condition.value.lower(), literal=True)
+    if operator == "equals":
+        return text == condition.value.lower()
+    return pl.lit(False)
 
 
-def evaluate_rule(rule: Rule, transaction: Transaction) -> bool:
-    """Evaluate if transaction matches rule conditions (pure function)."""
+def rule_expr(rule: Rule) -> pl.Expr:
+    """Polars expression that is True where a transaction matches the rule."""
     if not rule.conditions:
-        return False
-
-    evaluators = [create_condition_evaluator(cond) for cond in rule.conditions]
-
-    if rule.match_type == "any":
-        return any(evaluator(transaction) for evaluator in evaluators)
-    else:
-        return all(evaluator(transaction) for evaluator in evaluators)
+        return pl.lit(False)
+    exprs = [_condition_expr(c) for c in rule.conditions]
+    combined = pl.any_horizontal(exprs) if rule.match_type == "any" else pl.all_horizontal(exprs)
+    return combined.fill_null(False)
 
 
-def apply_rule_actions(data_dir: str, rule: Rule, transaction_id: int) -> None:
-    """Apply rule actions to transaction (side effect isolated)."""
-    from sankash.services.transaction_service import mark_as_transfer, update_transaction_category
-
-    for action in rule.actions:
-        if action.action_type == "set_category":
-            update_transaction_category(data_dir, transaction_id, action.value, source="rule")
-        elif action.action_type == "mark_transfer":
-            transfer_account_id = int(action.value)
-            mark_as_transfer(data_dir, transaction_id, transfer_account_id)
-
-
-def apply_rules_to_uncategorized(data_dir: str) -> int:
-    """Apply all active rules to uncategorized transactions.
-
-    Returns count of transactions that were categorized.
-    """
-    from sankash.services.transaction_service import get_transactions
-
+def get_active_rules(data_dir: str) -> list[Rule]:
+    """Active rules as models, highest priority first."""
     rules_df = get_rules(data_dir, active_only=True)
     if rules_df.is_empty():
-        return 0
-
-    rules = [parse_rule_from_row(row) for row in rules_df.to_dicts()]
-
-    transactions_df, _ = get_transactions(data_dir, is_categorized=False, limit=100_000, offset=0)
-    if transactions_df.is_empty():
-        return 0
-
-    transactions = [Transaction(**row) for row in transactions_df.to_dicts()]
-
-    categorized_count = 0
-    for transaction in transactions:
-        for rule in rules:
-            if evaluate_rule(rule, transaction):
-                if transaction.id is not None:
-                    apply_rule_actions(data_dir, rule, transaction.id)
-                    categorized_count += 1
-                break
-    return categorized_count
+        return []
+    return [parse_rule_from_row(row) for row in rules_df.to_dicts()]
 
 
-def apply_rules_to_all(data_dir: str) -> int:
-    """Clear ALL categories, re-apply rules. Manual categorizations are restored
-    only for transactions that no rule matches.
+def apply_rules(df: pl.DataFrame, rules: list[Rule]) -> pl.DataFrame:
+    """Derive category per transaction (pure function).
 
-    Returns count of transactions that were categorized by rules.
+    A manual assignment (category_source == "manual") always wins; otherwise the
+    first matching rule in priority order sets the category. Nothing is stored, so
+    rule edits take effect immediately on all transactions.
     """
-    from sankash.core.storage import read_overrides, write_overrides
-    from sankash.services.transaction_service import get_transactions
+    if df.is_empty():
+        return df
 
-    overrides = read_overrides(data_dir)
+    # shortcut: only set_category actions are derived; mark_transfer is not, no rule uses it yet
+    rule_category = pl.lit(None, dtype=pl.Utf8)
+    for rule in reversed(rules):
+        category = next((a.value for a in rule.actions if a.action_type == "set_category"), None)
+        if category:
+            rule_category = pl.when(rule_expr(rule)).then(pl.lit(category)).otherwise(rule_category)
 
-    # Remember manual categorizations so we can restore unmatched ones
-    manual_categories = {}
-    for tid, data in overrides.items():
-        if data.get("category_source") == "manual" and "category" in data:
-            manual_categories[tid] = data["category"]
+    if "category_source" in df.columns:
+        is_manual = (pl.col("category_source") == "manual").fill_null(False)
+    else:
+        is_manual = pl.lit(False)
 
-    # Clear all category overrides
-    for tid in list(overrides.keys()):
-        overrides[tid].pop("category", None)
-        overrides[tid].pop("is_categorized", None)
-        overrides[tid].pop("category_source", None)
-    overrides = {tid: v for tid, v in overrides.items() if v}
-    write_overrides(data_dir, overrides)
-
-    # Apply rules (they dominate)
-    rule_count = apply_rules_to_uncategorized(data_dir)
-
-    # Restore manual categorizations for transactions that rules didn't match
-    overrides = read_overrides(data_dir)
-    restored = 0
-    for tid, category in manual_categories.items():
-        if tid not in overrides or not overrides[tid].get("is_categorized"):
-            if tid not in overrides:
-                overrides[tid] = {}
-            overrides[tid]["category"] = category
-            overrides[tid]["is_categorized"] = True
-            overrides[tid]["category_source"] = "manual"
-            restored += 1
-    if restored:
-        write_overrides(data_dir, overrides)
-
-    return rule_count
-
-
-def test_rule(data_dir: str, rule: Rule, limit: int = 100) -> pl.DataFrame:
-    """Test rule against existing transactions. Returns matching transactions."""
-    from sankash.services.transaction_service import get_transactions
-
-    transactions_df, _ = get_transactions(data_dir, limit=100_000, offset=0)
-    if transactions_df.is_empty():
-        return pl.DataFrame()
-
-    transactions_df = transactions_df.head(limit)
-    transactions = [Transaction(**row) for row in transactions_df.to_dicts()]
-
-    matching_ids = [
-        t.id for t in transactions
-        if t.id is not None and evaluate_rule(rule, t)
-    ]
-
-    if not matching_ids:
-        return pl.DataFrame()
-
-    return transactions_df.filter(pl.col("id").is_in(matching_ids))
+    return df.with_columns(
+        pl.when(is_manual).then(pl.col("category").cast(pl.Utf8)).otherwise(rule_category).alias("category")
+    ).with_columns(pl.col("category").is_not_null().alias("is_categorized"))
 
 
 def create_rule(data_dir: str, rule: Rule) -> int:
@@ -244,18 +156,6 @@ def delete_rule(data_dir: str, rule_id: int) -> None:
     records = read_yaml(data_dir, "rules")
     records = [r for r in records if r["id"] != rule_id]
     write_yaml(data_dir, "rules", records)
-
-
-def count_matching_transactions(data_dir: str, rule: Rule) -> int:
-    """Count how many transactions match a rule."""
-    from sankash.services.transaction_service import get_transactions
-
-    transactions_df, _ = get_transactions(data_dir, limit=100_000, offset=0)
-    if transactions_df.is_empty():
-        return 0
-
-    transactions = [Transaction(**row) for row in transactions_df.to_dicts()]
-    return sum(1 for t in transactions if evaluate_rule(rule, t))
 
 
 def get_rule_for_category(data_dir: str, category: str) -> dict | None:
@@ -438,3 +338,18 @@ def import_rules(data_dir: str, yaml_content: str) -> tuple[int, int]:
             added += 1
 
     return added, updated
+
+
+def rename_category_in_rules(data_dir: str, old_name: str, new_name: str) -> None:
+    """Point rules that target old_name at new_name (category rename cascade)."""
+    records = read_yaml(data_dir, "rules")
+    changed = False
+    for rec in records:
+        for action in rec.get("actions", []):
+            if action.get("action_type") == "set_category" and action.get("value") == old_name:
+                action["value"] = new_name
+                changed = True
+                if rec.get("name") == old_name:
+                    rec["name"] = new_name
+    if changed:
+        write_yaml(data_dir, "rules", records)
