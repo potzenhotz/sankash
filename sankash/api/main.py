@@ -4,6 +4,7 @@ Run: uv run uvicorn sankash.api.main:app --port 8001
 """
 
 from datetime import date
+from pathlib import Path
 from typing import Annotated, Literal
 
 import polars as pl
@@ -19,7 +20,11 @@ app = FastAPI(title="Sankash API")
 
 def get_data_dir() -> str:
     """Data directory, re-read per request like the Reflex app does."""
-    return load_settings().data_dir
+    data_dir = load_settings().data_dir
+    # A missing directory would otherwise look like an empty account
+    if not Path(data_dir).is_dir():
+        raise HTTPException(status_code=500, detail=f"Data directory not found: {data_dir}")
+    return data_dir
 
 
 DataDir = Annotated[str, Depends(get_data_dir)]

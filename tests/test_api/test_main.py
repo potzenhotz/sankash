@@ -72,3 +72,24 @@ def test_rejects_bad_input(client: TestClient) -> None:
     assert client.post("/api/rules/conditions", json=bad_field).status_code == 422
     blank = {"category": "Supermarkt", "field": "payee", "value": "   "}
     assert client.post("/api/rules/conditions", json=blank).status_code == 422
+
+
+def test_settings_resolve_data_dir_independent_of_cwd(tmp_path, monkeypatch) -> None:
+    """Starting a server from another directory must still find the project data."""
+    from config.settings import PROJECT_ROOT, load_settings
+
+    monkeypatch.chdir(tmp_path)
+    assert load_settings().data_dir == str(PROJECT_ROOT / "data")
+
+
+def test_missing_data_dir_is_an_error(tmp_path, monkeypatch) -> None:
+    """A wrong data_dir must surface as an error, not as an empty account."""
+    import sankash.api.main as api_main
+    from config.settings import Settings
+
+    monkeypatch.setattr(
+        api_main, "load_settings", lambda: Settings(data_dir=str(tmp_path / "missing"))
+    )
+    r = TestClient(app).get("/api/transactions")
+    assert r.status_code == 500
+    assert "Data directory not found" in r.json()["detail"]

@@ -6,6 +6,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 class Settings(BaseModel):
     """Application settings."""
@@ -16,18 +18,21 @@ class Settings(BaseModel):
     import_chunk_size: int = Field(default=1000)
 
 
-def load_settings(config_path: Path | str = "config/settings.yaml") -> Settings:
+def load_settings(config_path: Path | str = PROJECT_ROOT / "config" / "settings.yaml") -> Settings:
     """
     Load settings from YAML file (pure function).
 
-    Returns Settings instance with defaults if file doesn't exist.
+    Returns Settings instance with defaults if file doesn't exist. A relative
+    data_dir is resolved against the project root, so the result does not
+    depend on the directory a server was started from.
     """
     path = Path(config_path)
 
-    if not path.exists():
-        return Settings()
+    data: dict[str, Any] = {}
+    if path.exists():
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
 
-    with open(path, "r") as f:
-        data = yaml.safe_load(f) or {}
-
-    return Settings(**data)
+    settings = Settings(**data)
+    settings.data_dir = str(PROJECT_ROOT / settings.data_dir)  # no-op for absolute paths
+    return settings
