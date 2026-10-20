@@ -98,6 +98,17 @@ python scripts/setup.py
 reflex run
 ```
 
+## New frontend (in progress)
+
+A React frontend (`web/`) is replacing the Reflex pages one by one. It talks to a FastAPI layer (`sankash/api/`) over the same services. So far it covers the transactions page with keyboard categorization (`Enter` category, `n` rule, `r` reset to rule, `u` uncategorized only, `/` search).
+
+```bash
+uv run uvicorn sankash.api.main:app --host 127.0.0.1 --port 8001   # API
+cd web && npm install && npm run dev                                 # http://localhost:5173
+```
+
+The Reflex app keeps working alongside it; both read the same `data/` directory.
+
 ## Usage
 
 ### Import Transactions
