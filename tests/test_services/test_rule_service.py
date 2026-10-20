@@ -109,7 +109,7 @@ def test_rules_categorize_at_read_time(test_data_dir: str) -> None:
 
 
 def test_priority_and_manual_override(test_data_dir: str) -> None:
-    """Higher priority rule wins; a manual assignment wins over any rule."""
+    """Higher priority rule wins; manual wins over any rule until it is cleared."""
     _create_test_account(test_data_dir)
     tid = _create_grocery_transaction(test_data_dir)
     rule_service.create_rule(test_data_dir, _grocery_rule())
@@ -126,6 +126,10 @@ def test_priority_and_manual_override(test_data_dir: str) -> None:
     transaction_service.update_transaction_category(test_data_dir, tid, "Gifts")
     df, _ = transaction_service.get_transactions(test_data_dir)
     assert df["category"][0] == "Gifts"
+
+    transaction_service.clear_manual_category(test_data_dir, tid)
+    df, _ = transaction_service.get_transactions(test_data_dir)
+    assert df["category"][0] == "Food"
 
 
 def test_legacy_rule_overrides_are_ignored(test_data_dir: str) -> None:

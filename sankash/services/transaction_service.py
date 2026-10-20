@@ -180,6 +180,19 @@ def bulk_update_categories(data_dir: str, transaction_ids: list[int], category: 
     write_overrides(data_dir, overrides)
 
 
+def clear_manual_category(data_dir: str, transaction_id: int) -> None:
+    """Remove a manual category so rules decide again."""
+    overrides = read_overrides(data_dir)
+    vals = overrides.get(str(transaction_id))
+    if vals is None:
+        return
+    for key in ("category", "is_categorized", "category_source"):
+        vals.pop(key, None)
+    if not vals:
+        del overrides[str(transaction_id)]
+    write_overrides(data_dir, overrides)
+
+
 def mark_as_transfer(
     data_dir: str,
     transaction_id: int,

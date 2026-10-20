@@ -326,20 +326,31 @@ def transaction_row(transaction: dict) -> rx.Component:
             )
         ),
         rx.table.cell(
-            rx.cond(
-                transaction["is_categorized"],
-                rx.badge(
-                    transaction.get("category_display", transaction["category"]),
-                    color_scheme="blue"
-                ),
+            rx.hstack(
                 rx.select(
                     TransactionState.categories,
+                    value=transaction["category_display"],
                     placeholder="Uncategorized",
                     on_change=lambda cat: TransactionState.update_category(
                         transaction["id"], cat
                     ),
                     size="1",
                 ),
+                rx.cond(
+                    transaction["category_source"] == "manual",
+                    rx.tooltip(
+                        rx.icon_button(
+                            rx.icon("rotate-ccw", size=14),
+                            on_click=lambda: TransactionState.reset_category(transaction["id"]),
+                            size="1",
+                            variant="ghost",
+                            aria_label="Reset to rule",
+                        ),
+                        content="Manually set. Click to let rules decide again",
+                    ),
+                ),
+                spacing="1",
+                align="center",
             )
         ),
         rx.table.cell(

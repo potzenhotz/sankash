@@ -116,7 +116,8 @@ class TransactionState(BaseState):
             transactions = df.to_dicts()
             for txn in transactions:
                 cat = txn.get("category")
-                txn["category_display"] = reverse_map.get(cat) if cat else None
+                txn["category_display"] = reverse_map.get(cat, cat) if cat else ""
+                txn["category_source"] = txn.get("category_source") or ""
 
             self.transactions = transactions
         except Exception as e:
@@ -186,6 +187,14 @@ class TransactionState(BaseState):
             self.load_transactions()
         except Exception as e:
             self.error = f"Failed to update category: {str(e)}"
+
+    def reset_category(self, transaction_id: int) -> None:
+        """Drop the manual category so rules decide again."""
+        try:
+            transaction_service.clear_manual_category(self.data_dir, transaction_id)
+            self.load_transactions()
+        except Exception as e:
+            self.error = f"Failed to reset category: {str(e)}"
 
     def bulk_update_categories(self) -> None:
         """Update categories for selected transactions."""
