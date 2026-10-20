@@ -1,0 +1,54 @@
+version: "3"
+
+output: prefixed
+
+# Run `task` to list everything, `task dev` to start API + frontend.
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  dev:
+    desc: Start API (:8001) and React frontend (:5173) together; Ctrl+C stops both
+    deps: [api, web]
+
+  api:
+    desc: FastAPI with auto-reload on http://127.0.0.1:8001
+    cmds:
+      - uv run uvicorn sankash.api.main:app --host 127.0.0.1 --port 8001 --reload --reload-dir sankash --reload-dir config
+
+  web:
+    desc: Vite dev server on http://localhost:5173
+    dir: web
+    deps: [web:install]
+    cmds:
+      - npm run dev
+
+  web:install:
+    desc: Install frontend dependencies when missing or outdated
+    dir: web
+    sources: [package.json, package-lock.json]
+    generates: [node_modules/.package-lock.json]
+    cmds:
+      - npm install
+
+  reflex:
+    desc: Old Reflex app on http://localhost:3000 (until all pages are ported)
+    cmds:
+      - uv run reflex run
+
+  test:
+    desc: Python tests and frontend typecheck
+    deps: [web:install]
+    cmds:
+      - uv run pytest -q
+      - npm --prefix web run typecheck
+
+  build:
+    desc: Production build of the frontend into web/dist
+    deps: [web:install]
+    dir: web
+    cmds:
+      - npm run build

@@ -60,3 +60,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# go-task checksum cache
+.task/
