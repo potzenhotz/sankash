@@ -45,6 +45,7 @@ class RuleState(BaseState):
     ai_suggestion_reasoning: str = ""
     ai_match_field: str = "payee"        # "payee" or "notes" — LLM-suggested rule field
     ai_match_value: str = ""             # LLM-suggested keyword for the rule condition
+    _editor_tx: dict = {}                # transaction row the inline editor was opened for
 
     # Apfel server process
     apfel_running: bool = False
@@ -314,11 +315,13 @@ class RuleState(BaseState):
 
     # --- Manual rule creation from uncategorized panel ---
 
-    def start_manual_rule(self, payee: str, tx_id: int = 0) -> None:
+    def start_manual_rule(self, tx: dict) -> None:
         """Open inline rule editor for a transaction, pre-filled with its payee."""
         self._clear_ai_state()
+        payee = tx.get("payee") or ""
+        self._editor_tx = tx
         self.ai_suggesting_payee = payee
-        self.ai_suggesting_tx_id = tx_id
+        self.ai_suggesting_tx_id = tx.get("id", 0)
         self.ai_suggesting_provider = "manual"
         self.ai_match_field = "payee"
         self.ai_match_value = payee
@@ -444,6 +447,7 @@ class RuleState(BaseState):
                 for tx in self.uncategorized_transactions:
                     if str(tx.get("id")) == str(tx_id):
                         notes_sample = tx.get("notes", "") or ""
+                        self._editor_tx = tx
                         break
             else:
                 for tx in self.uncategorized_transactions:
@@ -496,12 +500,8 @@ class RuleState(BaseState):
         # Auto-fill value from the transaction so user does not have to retype.
         # Only overwrite when current value still matches the *other* field's
         # value (i.e., user hasn't already customized it).
-        tx = next(
-            (t for t in self.uncategorized_transactions
-             if t.get("id") == self.ai_suggesting_tx_id),
-            None,
-        )
-        if tx is None:
+        tx = self._editor_tx
+        if not tx:
             return
         new_value = (tx.get(field) or "").strip()
         other_value = (tx.get("notes" if field == "payee" else "payee") or "").strip()
@@ -542,11 +542,13 @@ class RuleState(BaseState):
             actual_category = self.category_display_map.get(
                 self.ai_suggested_category, self.ai_suggested_category
             )
-            # Find all uncategorized transactions matching this payee
+            # The clicked row plus all uncategorized transactions with the same payee
             matching_ids = [
                 tx["id"] for tx in self.uncategorized_transactions
                 if tx.get("payee") == self.ai_suggesting_payee
             ]
+            if self.ai_suggesting_tx_id and self.ai_suggesting_tx_id not in matching_ids:
+                matching_ids.append(self.ai_suggesting_tx_id)
             if matching_ids:
                 transaction_service.bulk_update_categories(
                     self.data_dir, matching_ids, actual_category
@@ -573,6 +575,7 @@ class RuleState(BaseState):
         self.ai_suggestion_reasoning = ""
         self.ai_match_field = "payee"
         self.ai_match_value = ""
+        self._editor_tx = {}
 
     # --- Export/Import ---
 

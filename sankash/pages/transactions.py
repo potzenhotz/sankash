@@ -3,6 +3,8 @@
 import reflex as rx
 
 from sankash.components.layout import layout
+from sankash.pages.rules import inline_rule_editor
+from sankash.state.rule_state import RuleState
 from sankash.state.transaction_state import TransactionState
 
 
@@ -133,165 +135,15 @@ def bulk_actions() -> rx.Component:
     )
 
 
-# --- Rule Dialog Components ---
-
-
-def rule_dialog_condition_item(condition: dict, index: int) -> rx.Component:
-    """Single condition row in the rule creation dialog."""
-    return rx.hstack(
-        rx.select(
-            ["payee", "amount", "notes"],
-            value=condition["field"],
-            on_change=lambda val: TransactionState.rule_update_condition_field(index, val),
-            size="2",
-        ),
-        rx.select(
-            ["contains", "equals", "<", ">"],
-            value=condition["operator"],
-            on_change=lambda val: TransactionState.rule_update_condition_operator(index, val),
-            size="2",
-        ),
-        rx.input(
-            placeholder="Value",
-            value=condition["value"],
-            on_change=lambda val: TransactionState.rule_update_condition_value(index, val),
-            size="2",
-            flex="1",
-        ),
-        rx.button(
-            rx.icon("trash-2", size=16),
-            on_click=lambda: TransactionState.rule_remove_condition(index),
-            size="1",
-            variant="ghost",
-            color_scheme="red",
-        ),
-        spacing="2",
-        width="100%",
-        align="center",
-    )
-
-
-def create_rule_dialog() -> rx.Component:
-    """Dialog for creating a rule from a transaction."""
-    return rx.dialog.root(
-        rx.dialog.content(
-            rx.dialog.title("Create Rule from Transaction"),
-            rx.dialog.description(
-                "Pre-filled from the selected transaction. Edit as needed.",
-                size="2",
-                color="gray",
-            ),
-            rx.vstack(
-                # Rule name
-                rx.vstack(
-                    rx.text("Rule Name", size="2", weight="bold"),
-                    rx.input(
-                        value=TransactionState.rule_form_name,
-                        on_change=TransactionState.set_rule_form_name,
-                        width="100%",
-                    ),
-                    spacing="1",
-                    width="100%",
-                ),
-                # Match type
-                rx.vstack(
-                    rx.text("Match Type", size="2", weight="bold"),
-                    rx.radio(
-                        ["all", "any"],
-                        value=TransactionState.rule_form_match_type,
-                        on_change=TransactionState.set_rule_form_match_type,
-                        direction="row",
-                    ),
-                    rx.text(
-                        rx.cond(
-                            TransactionState.rule_form_match_type == "all",
-                            "Match ALL conditions (AND logic)",
-                            "Match ANY condition (OR logic)",
-                        ),
-                        size="1",
-                        color="gray",
-                    ),
-                    spacing="1",
-                    width="100%",
-                ),
-                # Conditions
-                rx.vstack(
-                    rx.hstack(
-                        rx.text("Conditions", size="2", weight="bold"),
-                        rx.spacer(),
-                        rx.button(
-                            rx.icon("plus", size=14),
-                            "Add",
-                            on_click=TransactionState.rule_add_condition,
-                            size="1",
-                            variant="soft",
-                        ),
-                        width="100%",
-                        align="center",
-                    ),
-                    rx.foreach(
-                        TransactionState.rule_form_conditions,
-                        lambda cond, idx: rule_dialog_condition_item(cond, idx),
-                    ),
-                    spacing="2",
-                    width="100%",
-                ),
-                # Action
-                rx.vstack(
-                    rx.text("Category", size="2", weight="bold"),
-                    rx.select(
-                        TransactionState.categories,
-                        placeholder="Select Category",
-                        value=TransactionState.rule_form_action_value,
-                        on_change=TransactionState.set_rule_form_action_value,
-                        width="100%",
-                    ),
-                    spacing="1",
-                    width="100%",
-                ),
-                # Error message
-                rx.cond(
-                    TransactionState.rule_form_error != "",
-                    rx.callout(
-                        TransactionState.rule_form_error,
-                        icon="triangle_alert",
-                        color_scheme="red",
-                        size="1",
-                    ),
-                ),
-                # Buttons
-                rx.hstack(
-                    rx.dialog.close(
-                        rx.button(
-                            "Cancel",
-                            variant="soft",
-                            color_scheme="gray",
-                        ),
-                    ),
-                    rx.button(
-                        rx.icon("plus", size=16),
-                        "Create Rule",
-                        on_click=TransactionState.submit_rule_from_dialog,
-                    ),
-                    spacing="3",
-                    justify="end",
-                    width="100%",
-                ),
-                spacing="4",
-                width="100%",
-                padding_top="16px",
-            ),
-        ),
-        open=TransactionState.show_rule_dialog,
-        on_open_change=TransactionState.handle_rule_dialog_open_change,
-    )
-
-
-
-# --- Transaction Table ---
-
-
 def transaction_row(transaction: dict) -> rx.Component:
+    """Transaction table row plus the inline rule editor when opened for it."""
+    return rx.fragment(transaction_cells(transaction), rx.cond(
+        (RuleState.ai_suggesting_tx_id == transaction["id"]) & (RuleState.ai_suggesting_provider == "manual"),
+        inline_rule_editor(col_span=9, on_done=[TransactionState.load_transactions]),
+    ))
+
+
+def transaction_cells(transaction: dict) -> rx.Component:
     """Transaction table row (functional component)."""
     return rx.table.row(
         rx.table.cell(
@@ -371,12 +223,12 @@ def transaction_row(transaction: dict) -> rx.Component:
                 rx.text("-", color="gray", size="1"),
             )
         ),
-        # Wand button for rule creation
+        # Wand button: opens the shared inline rule editor
         rx.table.cell(
             rx.tooltip(
                 rx.button(
                     rx.icon("wand-sparkles", size=16),
-                    on_click=lambda: TransactionState.open_rule_dialog(transaction["id"]),
+                    on_click=lambda: RuleState.start_manual_rule(transaction),
                     size="1",
                     variant="ghost",
                 ),
@@ -559,7 +411,12 @@ def delete_all_transactions_dialog() -> rx.Component:
 
 @rx.page(
     route="/transactions",
-    on_load=[TransactionState.load_categories, TransactionState.load_transactions],
+    on_load=[
+        TransactionState.load_categories,
+        TransactionState.load_transactions,
+        RuleState.load_categories,
+        RuleState.load_uncategorized,
+    ],
 )
 def transactions_page() -> rx.Component:
     """Transactions page."""
@@ -592,6 +449,5 @@ def transactions_page() -> rx.Component:
             spacing="4",
             width="100%",
         ),
-        create_rule_dialog(),
         delete_all_transactions_dialog(),
     )

@@ -4,8 +4,7 @@ from datetime import date, timedelta
 
 import reflex as rx
 
-from sankash.core.models import Rule, RuleAction, RuleCondition
-from sankash.services import transaction_service, category_service, rule_service
+from sankash.services import category_service, transaction_service
 from sankash.state.base import BaseState
 
 
@@ -55,16 +54,6 @@ class TransactionState(BaseState):
     edit_category: str = ""
     edit_payee: str = ""
     edit_notes: str = ""
-
-    # Rule dialog
-    show_rule_dialog: bool = False
-    rule_form_name: str = ""
-    rule_form_match_type: str = "all"
-    rule_form_conditions: list[dict] = []  # Each: {field, operator, value}
-    rule_form_action_type: str = "set_category"
-    rule_form_action_value: str = ""
-    rule_form_error: str = ""
-    rule_form_success: str = ""
 
     # Delete all confirmation
     show_delete_all_dialog: bool = False
@@ -283,133 +272,6 @@ class TransactionState(BaseState):
             self.sort_order = "desc"
         self.current_page = 1
         self.load_transactions()
-
-    # --- Rule Dialog Methods ---
-
-    def open_rule_dialog(self, transaction_id: int) -> None:
-        """Open rule creation dialog pre-filled from a transaction."""
-        txn = None
-        for t in self.transactions:
-            if t.get("id") == transaction_id:
-                txn = t
-                break
-
-        if txn is None:
-            self.error = "Transaction not found"
-            return
-
-        payee = txn.get("payee", "")
-        category_display = txn.get("category_display") or ""
-
-        self.rule_form_name = f"Rule: {payee}"
-        self.rule_form_match_type = "all"
-        self.rule_form_conditions = [
-            {"field": "payee", "operator": "contains", "value": payee}
-        ]
-        self.rule_form_action_type = "set_category"
-        self.rule_form_action_value = category_display
-        self.rule_form_error = ""
-        self.rule_form_success = ""
-        self.show_rule_dialog = True
-
-    def close_rule_dialog(self) -> None:
-        """Close rule dialog and reset form."""
-        self.show_rule_dialog = False
-        self.rule_form_name = ""
-        self.rule_form_match_type = "all"
-        self.rule_form_conditions = []
-        self.rule_form_action_type = "set_category"
-        self.rule_form_action_value = ""
-        self.rule_form_error = ""
-        self.rule_form_success = ""
-
-    def handle_rule_dialog_open_change(self, is_open: bool) -> None:
-        """Handle dialog open state change (Escape/outside click)."""
-        if not is_open:
-            self.close_rule_dialog()
-
-    def rule_add_condition(self) -> None:
-        """Add a new condition to rule form."""
-        self.rule_form_conditions.append(
-            {"field": "payee", "operator": "contains", "value": ""}
-        )
-
-    def rule_remove_condition(self, index: int) -> None:
-        """Remove a condition from rule form by index."""
-        if 0 <= index < len(self.rule_form_conditions):
-            self.rule_form_conditions.pop(index)
-
-    def rule_update_condition_field(self, index: int, val: str) -> None:
-        """Update condition field at index."""
-        if 0 <= index < len(self.rule_form_conditions):
-            self.rule_form_conditions[index]["field"] = val
-
-    def rule_update_condition_operator(self, index: int, val: str) -> None:
-        """Update condition operator at index."""
-        if 0 <= index < len(self.rule_form_conditions):
-            self.rule_form_conditions[index]["operator"] = val
-
-    def rule_update_condition_value(self, index: int, val: str) -> None:
-        """Update condition value at index."""
-        if 0 <= index < len(self.rule_form_conditions):
-            self.rule_form_conditions[index]["value"] = val
-
-    def submit_rule_from_dialog(self) -> None:
-        """Create a rule from the dialog form."""
-        self.rule_form_error = ""
-        self.rule_form_success = ""
-
-        if not self.rule_form_name:
-            self.rule_form_error = "Rule name is required"
-            return
-
-        if not self.rule_form_conditions:
-            self.rule_form_error = "At least one condition is required"
-            return
-
-        for cond in self.rule_form_conditions:
-            if not cond.get("value"):
-                self.rule_form_error = "All conditions must have a value"
-                return
-
-        if not self.rule_form_action_value:
-            self.rule_form_error = "Please select a category"
-            return
-
-        try:
-            # Convert display category to actual name
-            actual_category = self.category_display_map.get(
-                self.rule_form_action_value, self.rule_form_action_value
-            )
-
-            rule_conditions = [
-                RuleCondition(
-                    field=cond["field"],
-                    operator=cond["operator"],
-                    value=cond["value"],
-                )
-                for cond in self.rule_form_conditions
-            ]
-
-            rule = Rule(
-                name=self.rule_form_name,
-                priority=0,
-                is_active=True,
-                match_type=self.rule_form_match_type,
-                conditions=rule_conditions,
-                actions=[
-                    RuleAction(
-                        action_type=self.rule_form_action_type,
-                        value=actual_category,
-                    )
-                ],
-            )
-
-            rule_service.create_rule(self.data_dir, rule)
-            self.close_rule_dialog()
-            self.load_transactions()
-        except Exception as e:
-            self.rule_form_error = f"Failed to create rule: {str(e)}"
 
     # --- Delete All Methods ---
 

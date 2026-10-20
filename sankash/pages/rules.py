@@ -257,8 +257,13 @@ def rules_table() -> rx.Component:
 # --- Per-transaction AI suggestion components ---
 
 
-def inline_rule_editor() -> rx.Component:
-    """Inline rule editor row — used for both manual and AI-suggested rules."""
+def inline_rule_editor(col_span: int = 5, on_done: list | None = None) -> rx.Component:
+    """Inline rule editor row, used for both manual and AI-suggested rules.
+
+    on_done: extra events to run after a rule is created or applied once
+    (e.g. reloading another page's table).
+    """
+    on_done = on_done or []
     return rx.table.row(
         rx.table.cell(
             rx.hstack(
@@ -328,7 +333,7 @@ def inline_rule_editor() -> rx.Component:
                     rx.button(
                         rx.icon("check", size=14),
                         "Create Rule",
-                        on_click=RuleState.accept_ai_suggestion,
+                        on_click=[RuleState.accept_ai_suggestion, *on_done],
                         size="1",
                         color_scheme="green",
                     ),
@@ -338,7 +343,7 @@ def inline_rule_editor() -> rx.Component:
                 rx.tooltip(
                     rx.button(
                         "Just This Once",
-                        on_click=RuleState.apply_once,
+                        on_click=[RuleState.apply_once, *on_done],
                         size="1",
                         variant="soft",
                     ),
@@ -356,7 +361,7 @@ def inline_rule_editor() -> rx.Component:
                 align="center",
                 padding="2",
             ),
-            col_span=5,
+            col_span=col_span,
         ),
         style={"background": "var(--green-2)"},
     )
@@ -403,9 +408,7 @@ def uncategorized_row(tx: dict) -> rx.Component:
                     rx.tooltip(
                         rx.button(
                             rx.icon("plus", size=14),
-                            on_click=lambda: RuleState.start_manual_rule(
-                                tx["payee"], tx["id"]
-                            ),
+                            on_click=lambda: RuleState.start_manual_rule(tx),
                             size="1",
                             variant="ghost",
                         ),
