@@ -62,7 +62,7 @@ sankash/
     pages/             # Reflex pages/routes
     components/        # Reusable UI components
     state/             # Reflex state management (OOP)
-  converters/          # Bank CSV converters
+    converters/        # Bank CSV converters
   scripts/             # Utility scripts
   tests/               # Test suite
 ```
