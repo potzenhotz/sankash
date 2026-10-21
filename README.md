@@ -1,6 +1,6 @@
 # Sankash - Personal Finance Budget Tracker
 
-A modern personal finance app built with Reflex, Polars, and Plotly.
+A personal finance app: import bank CSVs, categorize with rules, see where the money goes in a Sankey diagram. The UI is moving from Reflex to a React frontend (see [Status](#status)).
 
 ## Features
 
@@ -12,10 +12,11 @@ A modern personal finance app built with Reflex, Polars, and Plotly.
 
 ## Tech Stack
 
-- **Reflex** - Python web framework
-- **Polars** - Fast DataFrame operations
-- **Plotly** - Interactive visualizations
+- **Polars** - DataFrame operations in the service layer
 - **Pydantic** - Data validation
+- **FastAPI** - JSON API for the new frontend (`sankash/api/`)
+- **React + Vite + TypeScript** - new frontend (`web/`), TanStack Query, cmdk, ECharts
+- **Reflex + Plotly** - old UI, still used for the pages not ported yet
 
 ## Architecture
 
@@ -24,7 +25,7 @@ This project follows a **functional-first approach** where possible:
 - **Pure functions** for business logic (services, utils)
 - **No global state** - settings loaded on demand
 - **Immutable data flow** - Polars DataFrames passed through pipelines
-- **File-based storage** - no database, no migrations
+- **File-based storage** - no database
 
 ### Data Storage
 
@@ -54,17 +55,19 @@ Rule results are never stored: every read derives the category as "manual assign
 
 ```
 sankash/
+  Taskfile.yml         # task dev / test / build / reflex
   config/              # Application settings (YAML-based)
   sankash/
+    api/               # FastAPI app for the React frontend
     core/              # Storage layer and data models
-    services/          # Business logic (pure functions)
+    services/          # Business logic (pure functions), shared by both UIs
     utils/             # Helper functions (pure)
-    pages/             # Reflex pages/routes
-    components/        # Reusable UI components
-    state/             # Reflex state management (OOP)
     converters/        # Bank CSV converters
+    pages/ components/ state/   # Reflex UI (being replaced)
+  web/                 # React frontend (Vite, TypeScript)
+    src/dashboard.ts   # Dashboard computations (tested with node:test)
   scripts/             # Utility scripts
-  tests/               # Test suite
+  tests/               # Python test suite
 ```
 
 ### Key Design Principles
@@ -73,32 +76,24 @@ sankash/
 2. **Pure functions** - Services return new data without side effects where possible
 3. **Separation of concerns** - Storage, business logic, and UI are decoupled
 4. **Type safety** - Pydantic models for data validation
-5. **No migrations** - File-based storage evolves naturally with the code
+5. **Ad-hoc migrations** - schema changes are handled in code on read (e.g. `parent_id` backfill, `migrate_rules_to_category_based`); keep them idempotent
 
 ## Setup
 
-1. Install dependencies:
+Requires [uv](https://docs.astral.sh/uv/), Node.js and [go-task](https://taskfile.dev) (`brew install go-task`).
+
 ```bash
-pip install -e ".[dev]"
+uv sync                      # Python dependencies
+uv run python scripts/setup.py   # first run only: creates data/
+task dev                     # API + React frontend → http://localhost:5173
+task reflex                  # old UI → http://localhost:3000 (rules, import, ...)
 ```
 
-2. Create configuration:
-```bash
-cp config/settings.example.yaml config/settings.yaml
-# Edit settings.yaml with your preferences
-```
+`config/settings.yaml` is optional (copy `config/settings.example.yaml`). A relative `data_dir` is resolved against the project root, so it does not matter which directory you start from.
 
-3. Initialize data directory:
-```bash
-python scripts/setup.py
-```
+## Status
 
-4. Run the app:
-```bash
-reflex run
-```
-
-## New frontend (in progress)
+### New frontend (in progress)
 
 A React frontend (`web/`) is replacing the Reflex pages one by one. It talks to a FastAPI layer (`sankash/api/`) over the same services. So far it covers:
 
@@ -112,9 +107,20 @@ task dev      # API on :8001 + frontend on http://localhost:5173, Ctrl+C stops b
 task          # list all tasks (api, web, reflex, test, build)
 ```
 
-Requires [go-task](https://taskfile.dev) (`brew install go-task`).
-
 The Reflex app keeps working alongside it; both read the same `data/` directory.
+
+### Next steps
+
+1. Port the **rules page** (then all categorization lives in the new frontend), then categories, import, accounts, settings
+2. Remove the Reflex UI (`sankash/pages`, `components`, `state`, `rxconfig.py`) once everything is ported
+3. Generate frontend types from the OpenAPI schema (`openapi-typescript`) instead of the hand-written `web/src/api.ts` once the API grows
+
+### Deferred / known issues
+
+- **Bank sync instead of CSV export**: evaluated FinTS (`python-fints` needs a free product ID from the Deutsche Kreditwirtschaft, 10-15 working days), Enable Banking (free for own accounts, data passes a third party) and MoneyMoney. Deferred; CSV import stays. Watch out: `imported_id` hashes payee/notes text, so a new source would duplicate CSV rows without a cutoff date.
+- Rule actions of type `mark_transfer` are not derived at read time (no rule uses them, the UI cannot create them)
+- Reflex transactions page shows amounts as `€-550` instead of `-550,00 €`
+- Frontend bundle is ~880 KB (mostly ECharts); fine locally, Vite warns on build
 
 ## Usage
 
@@ -128,23 +134,13 @@ Define rules to automatically categorize transactions based on payee, amount, or
 
 ### View Dashboard
 
-Explore your spending with interactive Sankey diagrams and charts.
+Explore your spending in the Sankey diagram; click a category, account or flow to list its transactions.
 
 ## Development
 
-Run tests:
 ```bash
-pytest
-```
-
-Type checking:
-```bash
-mypy sankash
-```
-
-Linting:
-```bash
-ruff check sankash
+task test                     # pytest + frontend tests + TypeScript typecheck
+uv run ruff check sankash     # lint
 ```
 
 ## License
